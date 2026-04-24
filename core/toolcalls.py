@@ -55,6 +55,8 @@ class ToolcallManager:
         await self.channel.context.chat.add(assistant_message)
 
         # Execute each tool and add their responses
+        had_tool_error = False
+
         for tool_call_dict in repaired_tool_calls:
             tool_name = tool_call_dict['function']['name']
             tool_args = json_repair.loads(tool_call_dict['function']['arguments'])
@@ -97,6 +99,7 @@ class ToolcallManager:
                     }
                 except Exception as e:
                     core.log("toolcall", f"error: {str(e)}")
+                    had_tool_error = True
                     tool_response = {
                         "role": "tool",
                         "tool_call_id": tool_call_dict['id'],
@@ -116,13 +119,23 @@ class ToolcallManager:
 
         # Build context and stream response
         context = await self.channel.context.get(system_prompt=False)
+
+        replan_on_error = core.config.get("model", {}).get("agent_replan_on_error", False)
+        if had_tool_error and replan_on_error:
+            system_content = (
+                "One or more tool calls returned an error. "
+                "Please replan your approach and try a different strategy to achieve the goal."
+            )
+        else:
+            system_content = (
+                "If the tool response provides sufficient answers, "
+                "explain the results to the user. If not, call another tool."
+            )
+
         prompt = [
             {
                 "role": "system",
-                "content": (
-                    "If the tool response provides sufficient answers, "
-                    "explain the results to the user. If not, call another tool."
-                )
+                "content": system_content
             }
         ] + context
 

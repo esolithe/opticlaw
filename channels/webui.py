@@ -49,6 +49,7 @@ JS_FILES = [
     "upload",
     "theming",
     "modal_settings",
+    "new_menu_options",
     "storage_editor",
     "responsive",
     "init"

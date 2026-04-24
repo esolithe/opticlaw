@@ -16,7 +16,8 @@ default_config = {
     "model": {
         "name": "MODEL_HERE",
         "temperature": 0.2,
-        "use_tools": True
+        "use_tools": True,
+        "agent_replan_on_error": False
     },
     "channels": {
         "enabled": ["cli", "webui"],

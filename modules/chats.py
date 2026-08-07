@@ -1,4 +1,5 @@
 import core
+import datetime
 
 class Chats(core.module.Module):
     """Lets you or the AI manage your chats"""
@@ -22,7 +23,7 @@ class Chats(core.module.Module):
         return f"Available categories to categorise chat into: {', '.join(cats)}" if len(cats) > 1 else None
 
     async def _get_categories(self):
-        cats = [c for c in await self.channel.context.chat.get_categories() if len(c.split(":")) == 1 and c]
+        cats = [c for c in self.channel.context.chat.get_categories() if len(c.split(":")) == 1 and c]
         return cats
 
     async def get_categories(self):
@@ -33,58 +34,21 @@ class Chats(core.module.Module):
         return self.result(cats)
 
     # AI tool version
-    async def organize(self, new_name: str, category: str, tags: list = []):
+    async def organize(self, new_name: str, category: str, tags: list = None):
         """Lets you rename, categorize, and tag the current chat. If the chat fits within an existing category (defined in your system prompt), use that one. If a fitting category does not exist, create a new one."""
         if not new_name:
             return self.result("name must not be blank", False)
 
-        await self.channel.context.chat.set_title(new_name)
-        await self.channel.context.chat.set_category(category)
-        await self.channel.context.chat.set_tags(tags)
+        if tags is None:
+            tags = []
+
+        await self.channel.context.chat.set("title", new_name)
+        await self.channel.context.chat.set("category", category)
+        await self.channel.context.chat.set("tags", tags)
         return self.result(f"chat organised!")
 
     async def _search(self, query: str, max_results: int = 20):
-        chats = await self.channel.context.chat.get_all()
-        if not chats:
-            return False
-
-        found_chats = []
-        count = 0
-        for index, chat in enumerate(chats):
-            # do not search within current chat
-            if index == 0 or index == len(chats)-1:
-                continue
-
-            if count > max_results:
-                break
-
-            # create a new chat dict so that we can include only the messages that contain the query
-            filtered_chat = {"id": chat.get("id"), "title": chat.get("title"), "tags": chat.get("tags", []), "messages": []}
-            found = False
-
-            # search within title
-            if chat.get("title", "").lower().strip().find(query.lower().strip()) != -1:
-                found = True
-
-            # search within content
-            for message in chat.get("messages", []):
-                content = message.get("content", "")
-                if not isinstance(content, str):
-                    continue
-
-                if content.lower().find(query.lower().strip()) != -1:
-                    filtered_chat["messages"].append({"role": message.get("role"), "content": message.get("content")})
-                    found = True
-                    break
-
-            if found:
-                count += 1
-                found_chats.append(filtered_chat)
-
-        if not found_chats:
-            return False
-
-        return found_chats
+        return await self.channel.context.chat.search(query, max_results)
 
     # command version
     @core.module.command("search")
@@ -97,7 +61,8 @@ class Chats(core.module.Module):
 
         output = "" if not found else f"Found these chats containing '{query}':\n\n"
         for chat in found:
-            output += f"[{chat.get('id')}] {chat.get('title')}\n"
+            date_str = datetime.datetime.fromisoformat(chat.get('updated')).strftime("%x %X")
+            output += f"[{date_str}] [{chat.get('id')}] {chat.get('title')}\n"
 
         return output
 
@@ -108,7 +73,6 @@ class Chats(core.module.Module):
         if not found:
             return self.result("no results found")
         return self.result(found)
-
 
     async def _compress(self):
         await self.manager.channel.push("Compressing your chat history..")
@@ -121,10 +85,10 @@ class Chats(core.module.Module):
             return None
 
         # add special cutoff message that gets handled by the context manager
-        await self.manager.channel.context.chat.add(self.manager.channel.context.SUMMARIZATION_CUTOFF)
+        await self.manager.channel.context.chat.messages.add(self.manager.channel.context.SUMMARIZATION_CUTOFF)
 
         # add AI's summarization
-        await self.manager.channel.context.chat.add({"role": "assistant", "content": response.get("content")})
+        await self.manager.channel.context.chat.messages.add({"role": "assistant", "content": response.get("content")})
 
         return True
 

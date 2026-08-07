@@ -1,0 +1,53 @@
+#chat-window {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    width: 100%;
+    min-width: 40%;
+    max-height: 100%;
+
+    border: 1px solid var(--border-sidebar);
+    #messages {
+        /* the area where message bubbles show up.. duh */
+        display: flex;
+        flex: 1;
+        overflow-y: auto;
+        padding: 20px;
+        flex-direction: column;
+        gap: 18px;
+        background-color: var(--bg-primary);
+        background-image: var(--bg-pattern);
+        background-size: var(--bg-pattern-size);
+        width: var(--chat-content-width, 100%);
+        margin: 0 auto;
+        min-height: 0;
+
+        .message-wrapper {
+            /* message bubble alignment */
+            &.user {
+                align-items: flex-end;
+            }
+
+            &.assistant {
+                align-items: flex-start;
+            }
+
+            &.user_command {
+                align-items: flex-end;
+            }
+
+            &.command_response {
+                align-items: flex-start;
+            }
+        }
+    }
+
+    .notice {
+        text-align: center;
+        height: auto;
+        color: var(--important);
+        border: 1px dashed var(--important);
+    }
+}
+
+

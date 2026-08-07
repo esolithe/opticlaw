@@ -1,12 +1,13 @@
 import core
+import os
 
 class Docs(core.module.Module):
     """Allows your AI to grab documentation about anything you want. Has OpenLumara documentation included!"""
 
     settings = {
-        "documentation_path": {
-            "description": "The folder to grab docs from. It uses folders with markdown files. Leave blank to set it to the built-in openlumara documentation!",
-            "default": None
+        "folders": {
+            "description": "The folders to grab docs from. These folders can contain any plaintext files you want, such as txt, markdown, and so on, and it can be a nested folder structure.",
+            "default": ["openlumara_docs"]
         },
         "insert_system_prompt": {
             "description": "Will make your AI aware of all documentation subjects available to it. Stays small in system prompt because it only lists the top-level folders, which are the topics the documentation is about, not the individual pages.",
@@ -15,68 +16,82 @@ class Docs(core.module.Module):
     }
 
     async def on_ready(self):
-        docs_path = self.config.get("documentation_path") or core.get_path("docs")
-        self.data = core.storage.StorageDict(".", "markdown", path=docs_path)
+        folders = self.config.get("folders")
+        if folders:
+            for folder in folders:
+                os.makedirs(core.get_path(os.path.expanduser(folder)).rstrip(os.path.sep), exist_ok=True)
 
-        # force load so it works in temporary mode
-        self.data.load()
+        if self.config.get("insert_system_prompt"):
+            self.disabled_tools.append("get_topics")
 
-    async def on_system_prompt(self):
-        if not self.config.get("insert_system_prompt"):
+    async def _get_folder_names(self):
+        """translates the folder path list into basenames for the AI"""
+        folders = self.config.get("folders")
+        if not folders:
+            return []
+
+        paths = [f.rstrip(os.path.sep) for f in folders]
+        return [os.path.basename(f) for f in paths]
+
+    async def _get_folder_path(self, folder: str):
+        """resolves a folder basename to its full path"""
+        folders = self.config.get("folders")
+        if not folders:
             return None
 
-        topic_str = ", ".join(self.data.keys())
+        for f in folders:
+            if os.path.basename(f.rstrip(os.path.sep)) == folder.rstrip(os.path.sep):
+                return core.get_path(os.path.expanduser(f)).rstrip(os.path.sep)
 
-        return f"Topics available to fetch documentation on: {topic_str}"
+    async def on_system_prompt(self):
+        folders = await self._get_folder_names()
+        if not folders:
+            return None
+        return f"## Documentation can be fetched from these folders:\n{', '.join(folders)}"
 
-    def _find_topic(self, topic: str):
-        found = False
-        for key in self.data.keys():
-            if key.lower().strip() == topic.lower().strip():
-                found = True
-                break
-        return found
+    async def get_topics(self):
+        return self.result(await self._get_folder_names())
 
-    async def read(self, topic: str, subject: str = None):
-        """Reads documentation about a specific subject within a specific topic. 
-        If the subject is not provided or is a folder, it returns a list of available subjects.
-        If the subject is a file, it returns the content.
+    async def list(self, folder: str, subfolder: str = None):
+        try:
+            folder_path = await self._get_folder_path(folder)
+            if not folder_path:
+                return self.result(f"Folder '{folder}' does not exist within the docs module configuration.", success=False)
+            
+            # remove the folder from the requested path in case the AI decided to double-add it
+            if subfolder and subfolder.startswith(folder):
+                subfolder = subfolder[len(folder):]
 
-        ALWAYS start with ONLY a topic first, without a subject. Then drill down deeper.
+            base_path = core.sandbox_path(folder_path, subfolder or "")
+            
+            contents = os.listdir(base_path)
+            
+            prefix = f"{subfolder}/" if subfolder else ""
+            dirs = sorted([f"{prefix}{d}" for d in contents if os.path.isdir(os.path.join(base_path, d))])
+            files = sorted([f"{prefix}{f}" for f in contents if os.path.isfile(os.path.join(base_path, f))])
+            
+        except Exception as e:
+            return self.result(str(e), success=False)
 
-        """
+        return self.result({
+            "subfolders": dirs,
+            "files": files,
+            "instruction": "You can call docs_list again with a subfolder to navigate deeper, or use docs_read to read a file."
+        })
 
-        if not self._find_topic(topic):
-            return self.result("Documentation about that topic was not found. Please rely on your own knowledge or try a web search if available.", success=False)
+    async def read(self, folder: str, path: str):
+        folder_path = await self._get_folder_path(folder)
+        # remove the folder from the requested path in case the AI decided to double-add it
+        if path.startswith(folder):
+            path = path[len(folder):]
 
-        topic_dict = self.data[topic.lower().strip()]
+        if not folder_path:
+            return self.result(f"Folder '{folder}' does not exist within the docs module configuration.", success=False)
         
-        # If no subject is provided, list everything in the topic
-        if not subject or not subject.strip():
-            subjects = [k for k in topic_dict.keys()]
-            return self.result({
-                "subjects": subjects,
-                "instructions": "The subjects listed above are paths within this topic. You can call read_documentation again with a specific path as the subject to read the content."
-            })
-
-        # Traverse the path
-        parts = subject.strip("/").split("/")
-        current = topic_dict
-        
-        for part in parts:
-            if isinstance(current, dict) and part in current:
-                current = current[part]
-            else:
-                return self.result(f"Subject '{subject}' not found within topic '{topic}'.", success=False)
-
-        # If we ended up on a dictionary, it's a folder
-        if isinstance(current, dict):
-            prefix = subject.strip("/")
-            subjects = [f"{prefix}/{k}" if prefix else k for k in current.keys()]
-            return self.result({
-                "subjects": subjects,
-                "instructions": "The subjects listed above are paths within this folder. You can call read_documentation again with a specific path as the subject to read the content."
-            })
-        
-        # It's a file, return content
-        return current
+        target_path = core.sandbox_path(folder_path, path)
+            
+        try:
+            with open(target_path, 'r', encoding="utf-8") as f:
+                return self.result(f.read())
+        except Exception as e:
+            return self.result(str(e), success=False)

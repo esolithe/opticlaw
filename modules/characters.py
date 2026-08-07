@@ -88,14 +88,14 @@ class Characters(core.module.Module):
     async def cmd_switch(self, args: list):
         name = " ".join(args)
         if not name:
-            char = await self.channel.context.chat.get_data("character")
+            char = self.channel.context.chat.get("metadata").get("character")
             self.active = True
             if char:
                 return f"currently active character: {char}"
             else:
                 return "please provide a character name."
         elif name in("reset", "default"):
-                await self.channel.context.chat.set_data("character", "")
+                self.channel.context.chat.get("metadata")["character"] = "character"
                 self.active = False
                 return "character has been reset to default"
 
@@ -105,10 +105,11 @@ class Characters(core.module.Module):
 
         response = await self.switch(character)
 
-        return f"character switched to {character}"
+        char_name = self._find_char_name(name)
+        return f"character switched to {char_name}"
 
     async def on_system_prompt(self):
-        curr_char = await self.channel.context.chat.get_data("character")
+        curr_char = self.channel.context.chat.get("metadata").get("character")
 
         tool_text = f"Characters available to switch yourself to:\n{await self._list_characters()}" if (
             core.config.get("model", {}).get("use_tools") and
@@ -119,7 +120,7 @@ class Characters(core.module.Module):
         if not curr_char:
             return tool_text or None
 
-        char_name = await self.channel.context.chat.get_data("character")
+        char_name = self.channel.context.chat.get("metadata").get("character")
         char = self.characters.get(char_name)
 
         # the presence of the "data" key means it's
@@ -176,15 +177,15 @@ class Characters(core.module.Module):
 
         # if this is an empty chat, insert the first message into history by sending it as a push
         if first_msg:
-            if len(await self.channel.context.chat.get()) == 0:
+            if len(await self.channel.context.chat.messages.get()) == 0:
                 first_msg = self._replace_tags(char_name, first_msg)
                 await self.channel.push({"role": "assistant", "content": first_msg})
-                await self.channel.context.chat.add({"role": "assistant", "content": first_msg})
+                await self.channel.context.chat.messages.add({"role": "assistant", "content": first_msg})
 
         return char_text
 
     async def on_end_prompt(self):
-        curr_char = await self.channel.context.chat.get_data("character")
+        curr_char = self.channel.context.chat.get("metadata").get("character")
         if not curr_char:
             return None
 
@@ -216,7 +217,7 @@ class Characters(core.module.Module):
                 "description": char.get("identity")
             }
 
-        await self.channel.context.chat.set_data("character", char_data.get("name"))
+        self.channel.context.chat.get("metadata")["character"] = char_data.get("name")
         self.active = True
         user_name = self.user_profile.get("name", "User")
 
@@ -225,14 +226,15 @@ class Characters(core.module.Module):
             # bypass the usual tool response flow and instead send the first message as a push message
             first_msg = self._replace_tags(name, first_msg)
             await self.channel.push({"role": "assistant", "content": first_msg})
-            await self.channel.context.chat.add({"role": "assistant", "content": first_msg})
+            await self.channel.context.chat.messages.add({"role": "assistant", "content": first_msg})
             return None
 
         return self.result(f"Switch successful. Write your response as the character's first message.")
     
     async def switch_to_default(self):
         """Switches you back to your default identity."""
-        await self.channel.context.chat.set_data("character", "")
+        self.channel.context.chat.get("metadata")["character"] = ""
+
         self.active = False
         return "success"
 
@@ -276,6 +278,12 @@ class Characters(core.module.Module):
                 return character
         return None
 
+    def _find_char_name(self, name: str):
+        """searches for a character and returns the full name with correct case"""
+        for character_name, character in self.characters.items():
+            if character_name.lower().strip() == name.lower().strip():
+                return character_name
+
     def _replace_tags(self, name: str, character: str):
         """replaces the magic words defined in the character card spec with their appropriate replacements"""
         user_name = self.user_profile.get("name", "user")
@@ -293,7 +301,7 @@ class Characters(core.module.Module):
 
         return character
 
-    async def add(self, name: str, profile: str, short_summary: str, scenario: str, category: str, tags: list = [], first_message: str = "", post_history_instructions: str = ""):
+    async def add(self, name: str, profile: str, short_summary: str, scenario: str, category: str, tags: list = None, first_message: str = "", post_history_instructions: str = ""):
         """
         Adds a new character to your character storage.
 
@@ -308,6 +316,9 @@ class Characters(core.module.Module):
         """
         if not name.strip():
             return self.result("character name cannot be empty", False)
+
+        if tags is None:
+            tags = []
 
         exists = self._find_character(name)
         if exists:
@@ -407,11 +418,13 @@ class Characters(core.module.Module):
 
     async def delete(self, name: str):
         """Deletes a character. Use ONLY if user explicitly requests it."""
-        name = self._find_character(name)
+        name = self._find_char_name(name)
+
         if name in self.characters.keys():
             self.characters.pop(name, None)
             self.characters.save()
             return self.result(f"character {name} deleted")
+
         return self.result("character doesn't exist!", False)
 
     async def set_user_persona(self, name: str, profile: str):

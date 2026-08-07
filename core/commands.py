@@ -1,5 +1,6 @@
 import core
-import textwrap
+import os
+import datetime
 import asyncio
 import shlex
 
@@ -11,6 +12,7 @@ BUILTIN_COMMANDS = {
         "prompt <module name>": "show system prompt for that module",
         "history": "show full chat history",
         "context": "show full context being sent to AI",
+        "export": "export the current chat history to a file",
         "status": "show status info",
         "config": "Explore, view, and set config settings",
         "restart": "restarts the server",
@@ -234,23 +236,32 @@ def _get_config_value(path: list):
 
 class Commands:
     # delete these after they are shown to the user once
-    GHOST = ("help", "new", "clear", "context", "prompt", "tools", "stop")
+    GHOST = ("help", "new", "clear", "context", "prompt", "tools")
     PUBLIC_COMMANDS = ("new", "clear", "status", "stop")
 
     def __init__(self, channel):
         self.channel = channel
 
-    async def _get_help(self):
+    async def _get_help(self, args: list = []):
         # Get automated command help grouped by module
         output = []
 
         cmd_help = core.commands.get_commands(self.channel.manager.modules)
         if cmd_help:
-            for category, commands in cmd_help.items():
-                output.append(f"== {category} ==")
-                for command, desc in commands.items():
+            if args:
+                module_name = args[0]
+
+                # get a specific module's help
+                if not module_name in cmd_help.keys():
+                    return "that's not a valid topic! check /help"
+                
+                for command, desc in cmd_help[module_name].items():
                     output.append(f"{command:<30} {desc}")
-                output.append("") # newline
+
+                return "\n".join(output)
+            else:
+                topics = "\n".join([f"- {topic}" for topic in cmd_help.keys()])
+                return f"use /help with one of the following topics:\n{topics}\n\nexample: /help core"
 
         return "\n".join(output)
 
@@ -272,63 +283,66 @@ class Commands:
     async def _extract_cmd(self, message_text):
         message_content = message_text.strip()
         cmd_prefix = core.config.get("core").get("cmd_prefix", "/")
-        cmd_prefix_index = message_content.lower().find(cmd_prefix.lower())+len(cmd_prefix)
-
+        
+        if not message_content.startswith(cmd_prefix):
+            return None, None, []
+        
         try:
-            cmd = shlex.split(message_content[cmd_prefix_index:])
-            args = cmd[1:]
+            cmd_full = shlex.split(message_content[len(cmd_prefix):])
+            args = cmd_full[1:]
+
+            cmd = cmd_full[0] if len(cmd_full)>0 else ""
+
             return (cmd_prefix, cmd, args)
         except ValueError as e:
-            # Handle malformed shell syntax gracefully
             return None, None, []
 
-    async def process_input(self, message: dict, authorized=False):
+    async def process_input(self, content: str, authorized=False):
         """wrapper around the real _process_input, handles insertion of context"""
-        content = self.channel._extract_content(message)
         cmd_prefix, cmd, args = await self._extract_cmd(content)
 
-        if cmd_prefix is None or cmd is None:
+        if cmd_prefix is None:
             return False
+
+        # insert /command into context so that it gets properly tracked and displayed
+        use_temporary = self._check_if_temporary(cmd)
+
+        args_display = ""
+        if args:
+            args_display += " "
+            args_display += " ".join(args)
+        await self.channel.context.chat.messages.add({"role": "user", "content": f"{cmd_prefix}{cmd}{args_display}"}, cmd=True, ghost=use_temporary)
 
         if len(cmd) <= 0:
             raise core.exceptions.UnauthorizedException("Command was somehow zero length. Aborting for security reasons.")
 
-        if not authorized and cmd[0] not in self.PUBLIC_COMMANDS:
+        if not authorized and cmd not in self.PUBLIC_COMMANDS:
             raise core.exceptions.UnauthorizedException("You are not authorized to run admin commands.")
 
         # treat message as normal if it's not a command
         if cmd is None or not content.startswith(cmd_prefix):
             return False
 
-        use_temporary = self._check_if_temporary(cmd[0])
-
-        # insert /command into context so that it gets properly tracked and displayed
-        args_display = ""
-        if args:
-            args_display += " "
-            args_display += " ".join(args)
-        await self.channel.context.chat.add({"role": "user", "content": f"{cmd_prefix}{cmd[0]}{args_display}"}, ghost=use_temporary)
-
-        result = await self._process_input(message)
+        result = await self._process_input(content)
 
         # insert command result into context, flagging as temporary if needed
-        await self.channel.context.chat.add({"role": "assistant", "content": f"[Command Output]:\n{result}"}, ghost=use_temporary)
+        await self.channel.context.chat.messages.add({"role": "assistant", "content": f"{result}"}, cmd=True, ghost=use_temporary)
 
         return result
 
-    async def _process_input(self, message: dict):
+    async def _process_input(self, content: str):
         """processes user input and detects special commands that control opticlaw"""
 
-        cmd_prefix, cmd, args = await self._extract_cmd(self.channel._extract_content(message))
+        cmd_prefix, cmd, args = await self._extract_cmd(content)
 
-        match cmd[0]:
+        match cmd:
             # case "undo":
             #     self.channel.manager.API._messages.pop()
             #     self.channel.manager.API._messages.pop()
             #     self._last_cmd_was_temporary = True
             #     return "Turn undone."
             case "help":
-                return await self._get_help()
+                return await self._get_help(args)
             case "ping":
                 return "pong!"
             case "new":
@@ -351,43 +365,42 @@ class Commands:
 
                 """list chats"""
 
-                chats = await self.channel.context.chat.get_all()
+                chats = self.channel.context.chat.get_all()
                 if not chats:
                     return self.result("No saved chats found.", False)
 
                 result = f"Saved chats for {self.channel.name}:\n"
-                for conv in chats[-20:]: # only the last 20 to avoid overwhelming the AI
-                    result += f"- [{conv.get('id')}] {conv.get('title', 'Untitled')[:50]}\n"
+                for conv in reversed(chats[:10]): # only the first 10 to avoid overwhelming the AI
+                    date_str = datetime.datetime.fromisoformat(conv.get('updated')).strftime("%x %X")
+                    result += f"- [{date_str}] [{conv.get('id')}] {conv.get('title', 'Untitled')[:50]}\n"
 
                 return result
-
             case "chat":
                 """load chat using its ID"""
                 if not args:
-                    chat_title = await self.channel.context.chat.get_title()
-                    chat_category = await self.channel.context.chat.get_category()
-                    chat_tags = await self.channel.context.chat.get_tags()
+                    chat = self.channel.context.chat
+
                     chat_tags_str = "None"
-                    if chat_tags:
-                        chat_tags_str = ", ".join(chat_tags)
-                    chat_data = await self.channel.context.chat.get_data() or {}
+                    if chat.get('tags'):
+                        chat_tags_str = ", ".join(chat.get('tags'))
+                    chat_data = self.channel.context.chat.get("metadata") or {}
                     if chat_data:
                         chat_data_str = "\n"
                         chat_data_str += "\n".join([f"  {key}: {value}" for key, value in chat_data.items()])
                     else:
                         chat_data_str = "None"
 
-                    return f"== chat info ==\ntitle: {chat_title}\ncategory: {chat_category}\ntags: {chat_tags_str}\ndata: {chat_data_str}"
+                    return f"== chat info ==\ntitle: {chat.get('title')}\ncategory: {chat.get('category')}\ntags: {chat_tags_str}\nmetadata: {chat_data_str}"
                 match args[0].lower().strip():
                     case "rename":
                         newname = " ".join(args[1:])
-                        result = await self.channel.context.chat.set_title(newname)
+                        result = await self.channel.context.chat.set("title", newname)
                         if not result:
                             return "rename failed"
                         return f"chat renamed to {newname}"
                     case "category":
                         newcat = " ".join(args[1:])
-                        result = await self.channel.context.chat.set_category(newcat)
+                        result = await self.channel.context.chat.set("category", newcat)
                         if not result:
                             return "setting category failed"
                         return f"chat categorised into {newcat}"
@@ -402,42 +415,36 @@ class Commands:
                     return "Already connected."
 
                 result = await self.channel.manager.API.connect()
-                if not result:
-                    return f"error connecting to API: {self.channel.manager.API.get_last_error()}"
+                if isinstance(result, core.api.APIError):
+                    return f"Error while connecting: {result}"
 
-                return "✓ Connected!"
+                return "Connected!"
             case "reconnect":
-                    result = await self.channel.manager.reconnect_api()
+                result = await self.channel.manager.API.reconnect()
 
-                    if result["success"]:
-                        return f"✓ {result['message']}"
-                    else:
-                        response = f"✗ Connection failed: {result['error']}"
-                        if "action" in result:
-                            response += f"\n{result['action']}"
-                        return response
+                if isinstance(result, core.api.APIError):
+                    return f"Error while reconnecting: {result}"
+
+                return "Reconnected"
             case "disconnect":
                 await self.channel.manager.API.disconnect()
                 return "Disconnected from API"
             case "status":
-                status = self.channel.manager.get_api_status()
+                status = self.channel.manager.API.get_status()
                 lines = ["== API Status =="]
 
                 lines.append(f"Connected: {'Yes' if status['connected'] else 'No'}")
                 lines.append(f"Model: {status['model'] or 'Not set'}")
                 lines.append(f"URL: {status['url']}")
-                lines.append(f"Key configured: {'Yes' if status['key_configured'] else 'No'}")
 
-                if status['error']:
-                    lines.append(f"Last error: {status['error']}")
-
-                lines.append("")
-                lines.append("== Context Size ==")
-                context_size = await self.channel.context.get_size()
-                ctx_string = ""
-                for key, value in context_size.items():
-                    ctx_string += f"{key}: {value}\n"
-                lines.append(ctx_string)
+                if self.channel.manager.API.connected:
+                    lines.append("")
+                    lines.append("== Context Size ==")
+                    context_size = await self.channel.context.get_size()
+                    ctx_string = ""
+                    for key, value in context_size.items():
+                        ctx_string += f"{key}: {value}\n"
+                    lines.append(ctx_string)
 
                 return "\n".join(lines)
             case "modules":
@@ -621,6 +628,25 @@ class Commands:
 
                 enabled_str = "\n".join(enabled)
                 return f"== modules with active prompts ==\n{enabled_str}"
+            
+            case "export":
+                export_str = await self.channel.context.chat.export()
+
+                export_dir = core.get_data_path(os.path.join("chat_exports", self.channel.name))
+                file_name = datetime.datetime.now().strftime("%Y%m%d")+"_"+self.channel.context.chat.get('title')
+
+                # remove a bunch of junk from the filename, as well as replace spaces
+                file_name = file_name.strip('/').replace(" ", "_").replace("..", "")
+                file_name = file_name[:50] # shorten the name
+
+                file_path = core.get_data_path(os.path.join("chat_exports", self.channel.name, f"{file_name}.txt"))
+                os.makedirs(export_dir, exist_ok=True)
+
+                with open(file_path, 'w', encoding="utf-8") as f:
+                    f.write(export_str)
+
+                return f"chat exported to {file_path}"
+
             case "restart":
                 await self.channel.manager.restart()
                 return "restarting server"
@@ -631,7 +657,7 @@ class Commands:
                 # handle module commands by using their decorated methods
 
                 if self.channel.manager.modules:
-                    cmd_lookup = cmd[0].lower().strip()
+                    cmd_lookup = cmd.lower().strip()
 
                     # See if this command exists in the command registry
                     if cmd_lookup in core.module._command_registry:
@@ -642,7 +668,7 @@ class Commands:
                                     # Bind the method to the instance and call it
                                     bound_method = method.__get__(module_inst, registered_cls)
                                     try:
-                                        return await bound_method(cmd[1:])
+                                        return await bound_method(args)
                                     except Exception as e:
                                         self.channel.log_error("error while executing command", e)
 

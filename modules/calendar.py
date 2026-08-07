@@ -15,11 +15,13 @@ class Calendar(core.module.Module):
         },
         "range": {
             "description": "The range of days relative to today that you want the AI to see the events of",
-            "default": 7
+            "default": 7,
+            "depends": "insert_system_prompt"
         },
         "include_past_events": {
             "description": "Whether or not to make the AI aware of calendar events that have already passed. Many local AI's don't handle this very well, so it's recommended to leave this off, or they will start to remind you of appointments that have already happened. It's still included for posterity, in case you're using a model that handles this better.",
-            "default": False
+            "default": False,
+            "depends": "insert_system_prompt"
         },
         "notifications": {
             "description": "Whether to receive notifications about upcoming events",
@@ -29,11 +31,13 @@ class Calendar(core.module.Module):
             "type": "select",
             "default": "webui",
             "description": "Which channel to send calendar notifications to",
-            "options": {name: f"Send notifications via {name}" for name in core.channel.get_available_channels()}
+            "options": {name: f"Send notifications via {name}" for name in core.channel.get_available_channels()},
+            "depends": "notifications"
         },
         "notification_window": {
             "description": "Amount of minutes in advance you should be notified. You can set this to 0 to be notified at the time of the event.",
-            "default": 30
+            "default": 30,
+            "depends": "notifications"
         }
     }
 
@@ -97,7 +101,7 @@ class Calendar(core.module.Module):
             message = f"🔔 **Calendar**: {event['title']} is starting {notify_window_str}"
             await channel.push(message)
             # add to context so the AI knows it just notified the user
-            await channel.context.chat.add({"role": "assistant", "content": message})
+            await channel.context.chat.messages.add({"role": "assistant", "content": message})
 
             # disable notification
             index = await self._get_event_by_id(event['id'])

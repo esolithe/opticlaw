@@ -1,8 +1,11 @@
 openai
-tiktoken
 msgpack
 pyyaml
 json-repair
+partial-json-parser
+regex
+filetype
+pypdf2
 python-ulid
 requests
 httpx

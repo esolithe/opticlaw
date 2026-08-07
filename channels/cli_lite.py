@@ -13,7 +13,7 @@ class CliLite(core.channel.Channel):
     async def run(self):
         while True:
             user_input = input("> ")
-            response = await self.send({"role": "user", "content": user_input}, commands_authorized=True)
+            response = await self.send(user_input, commands_authorized=True)
             print(response.get("content"), flush=True)
 
     def on_log(self, category, message):

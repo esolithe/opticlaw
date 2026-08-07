@@ -1,12 +1,23 @@
+# core
 import core
 import core.commands
+
+# system
 import os
 import sys
 import time
 import json
 import asyncio
+
+# parsing stuff
 import json_repair
-import re
+import partial_json_parser
+import regex
+import base64
+import filetype
+import io
+
+# an error occurred please try again later
 import traceback
 
 def get_available_channels():
@@ -34,10 +45,14 @@ class Channel:
         self.name = core.modules.get_name(self) # shorthand alias
         self.commands = core.commands.Commands(self)
         self._last_cmd_was_temporary = False
+
         self.context = core.context.Context(self) # each channel has its own context window
+        # the path to a channel's chat is: channel -> context -> chat
+
         self.console_buffer = [] # used to log system messages
 
         self.tc_manager = core.toolcalls.ToolcallManager(self)
+        self.turncollector = core.turns.TurnCollector()
 
         # used to track whether to preserve reasoning
         # for only the current "agentic turn"
@@ -61,15 +76,23 @@ class Channel:
             "keys_state": {}
         }
 
-    def __init_subclass__(cls, **kwargs):
-        super().__init_subclass__(**kwargs)
+    async def init(self):
+        """async class constructor. gets called by manager._load_channels()"""
+        await self.context.chat.autoload()
 
-        # merge the base class's settings with the subclass settings.
-        # this way, we can define settings ALL channels should have
-        for b in cls.__mro__[1:]:
-            if hasattr(b, "settings"):
-                cls.settings = b.settings | cls.settings
-                break
+    # ------------------
+    # Events
+    # ------------------
+    async def run(self):
+        # stub, meant for derivative channels to override
+        pass
+
+    async def on_ready(self):
+        """
+        called when the entire framework has fully initialized
+        (when the message "[CORE] Startup complete" shows up)
+        """
+        pass
 
     async def _shutdown(self):
         """internal shutdown function. gets called by the manager before on_shutdown()"""
@@ -82,87 +105,9 @@ class Channel:
             except asyncio.CancelledError:
                 pass
 
-    async def _set_as_active_channel(self):
-        if self.manager.channel is self:
-            return
-        self.manager.channel = self
-        self.manager.savedata["last_channel"] = self.name
-        self.manager.savedata.save()
-
-        # give all modules a way to access this channel
-        for module_name, module in self.manager.modules.items():
-            module.channel = self
-
-    def _get_disconnection_message(self):
-        status = self.manager.get_api_status()
-        error = status.get("error", "Unknown error")
-
-        message_parts = []
-
-        if error:
-            message_parts.append(f"Error: {error}")
-
-        if not status.get("url_configured"):
-            message_parts.append("Please configure your API URL in config/config.yml")
-        elif not status.get("key_configured"):
-            message_parts.append("Please configure your API key in config/config.yml")
-
-        return "\n".join(message_parts)
-
-    def _extract_content(self, message_dict):
-        """helper method that makes sure we always get the text content as a string from the messages array, even if it's multimodal"""
-        content = message_dict.get("content")
-
-        if isinstance(content, str):
-            return content
-        elif isinstance(content, list):
-            # it's multimodal
-            for item in content:
-                if isinstance(item, dict) and item.get("type") == "text":
-                    return item.get("text")
-
-        # fallback
-        return ""
-
-    def format_message(self, message: dict):
-        formatted = ""
-
-        role = message.get("role")
-
-        show_reasoning = self.config.get("show_reasoning")
-        reasoning_content = None
-
-        if role in ("user", "assistant"):
-            if show_reasoning:
-                reasoning_content = message.get("reasoning_content")
-                if reasoning_content:
-                    formatted += f"**Reasoning:**\n{reasoning_content}\n\n"
-
-            content = message.get("content")
-            if content:
-                if reasoning_content and show_reasoning:
-                    formatted += "**Conclusion**:\n"
-
-                formatted += f"{content}\n\n"
-
-        if role == "assistant":
-            if message.get("tool_calls"):
-                for tool_call in message.get("tool_calls"):
-                    formatted += self.tc_manager.display_call(tool_call)+"\n"
-
-                formatted += "\n\n"
-
-        if role == "tool":
-            formatted = "processing results.."
-
-        message["content"] = formatted.strip()
-
-        return message
-
-    async def _start_push_queue(self):
-        if not hasattr(self, "on_push"):
-            return
-        self._queue_task = asyncio.create_task(self._push_consumer())
+    async def on_shutdown(self):
+        """overridable method that runs on the channel's shutdown"""
+        pass
 
     async def _push_consumer(self):
         """Consumes messages from the queue and triggers on_push sequentially"""
@@ -206,129 +151,342 @@ class Channel:
         """
         pass
 
-    # async def _poll_loop(self):
-    #     """constantly polls the chat history to see if anything new arrived, and triggers on_message for every new message"""
-    #     if not hasattr(self, "on_message"):
-    #         return False
-    #
-    #     self.log(self.name, "started message polling loop")
-    #
-    #     while not getattr(self, "_shutting_down", False):
-    #         try:
-    #             # check for new messages
-    #             new_messages = await self.context.chat.get_new()
-    #
-    #             if new_messages:
-    #                 for message in new_messages:
-    #                     # trigger the event
-    #                     await self.on_message(self.format_message(message))
-    #
-    #             await asyncio.sleep(0.1)
-    #
-    #         except Exception as e:
-    #             self.log(self.name, f"error in poll loop: {str(e)}")
-    #             # if we hit an error, back off for a second so we don't spam the logs
-    #             await asyncio.sleep(1)
+    async def _start_push_queue(self):
+        if not hasattr(self, "on_push"):
+            return
+        self._queue_task = asyncio.create_task(self._push_consumer())
 
-    async def send(self, message: dict, commands_authorized=False):
-        """sends a message to the AI from within the current channel"""
+    async def on_push(self, message: dict):
+        """
+        overridable method that should immediately display a message in your channel.
+        used by modules all over the framework, such as the scheduler, calendar, and so on,
 
-        # as soon as user sends a message in this channel, set current channel (tracked in the manager) to this one
+        to send content to the user without having to prompt the AI
+        """
+        pass
+
+    async def on_install(self):
+        """Overridable method that triggers when the auto-installer installs the dependencies for a channel"""
+        pass
+    async def on_uninstall(self):
+        """Overridable method that triggers when the auto-installer uninstalls the dependencies for a channel"""
+        pass
+
+    async def push(self, message):
+        """
+        push a message to the push queue, which will instantly display it in all channels
+        """
+
+        if not hasattr(self, "push_queue"):
+            return False
+
+        # message can be either a str or a dict.
+        # if dict, just use it as-is
+        # otherwise, turn it into an openAI message dict
+        if isinstance(message, dict):
+            await self.context.chat.messages.add(message)
+            await self.push_queue.put(message)
+        else:
+            await self.context.chat.messages.add({"role": "assistant", "content": str(message)})
+            await self.push_queue.put({"role": "assistant", "content": str(message)})
+
+    # --------------------
+    # Helper methods
+    # --------------------
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+
+        # merge the base class's settings with the subclass settings.
+        # this way, we can define settings ALL channels should have
+        for b in cls.__mro__[1:]:
+            if hasattr(b, "settings"):
+                cls.settings = b.settings | cls.settings
+                break
+
+    async def _set_as_active_channel(self):
+        if self.manager.channel is self:
+            return
+        self.manager.channel = self
+        self.manager.savedata["last_channel"] = self.name
+        self.manager.savedata.save()
+
+        # give all modules a way to access this channel
+        for module_name, module in self.manager.modules.items():
+            module.channel = self
+
+    def _extract_content(self, message_dict):
+        """helper method that makes sure we always get the text content as a string from the messages array, even if it's multimodal"""
+        content = message_dict.get("content")
+
+        if isinstance(content, str):
+            return content
+        elif isinstance(content, list):
+            # it's multimodal
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    return item.get("text")
+
+        # fallback
+        return ""
+
+    # ---------------------
+    # Content Processors
+    # ---------------------
+    async def _process_multimodal(self, message: str = None, files: list = None) -> list:
+        """
+        Converts a list of file handler objects into an openAI API multimodal message object,
+        allowing the AI to process images, audio, etc.
+
+        For sending through send() and send_stream()
+
+        Structure is:
+        {
+            "my_file.png": (file handler object),
+            "my_audio.mp3": (file handler object),
+            and so on
+        }
+        """
+        content_blocks = []
+
+        # if the message was a list... this was already multimodal, so dont modify
+        if isinstance(message, list):
+            return {"role": "user", "content": message}
+
+        if not message and not files:
+            # wtf why would you do that
+            return None
+
+        # if no files were provided, just return the content unmodified
+        if not files:
+            return {"role": "user", "content": message}
+
+        filenames = []
+
+        # otherwise add the text message as a text block
+        if message:
+            content_blocks.append({"type": "text", "text": message})
+            filenames.append("") # so that indexes match
+
+        format_map = {
+            "audio/wav": "wav", "audio/mp3": "mp3", "audio/mpeg": "mp3",
+            "audio/ogg": "ogg", "audio/flac": "flac",
+            "audio/webm": "webm", "audio/mp4": "mp4", "audio/aac": "mp4",
+        }
+
+        message_dict = {"role": "user"}
+
+        for filename, file_data in files.items():
+            if not file_data:
+                continue
+
+            kind = filetype.guess(file_data)
+            mime_type = kind.mime if kind else "application/octet-stream"
+
+            if mime_type.startswith("image/"):
+                b64 = base64.b64encode(file_data).decode("utf-8")
+                content_blocks.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime_type};base64,{b64}"}
+                })
+
+            elif mime_type.startswith("audio/"):
+                b64 = base64.b64encode(file_data).decode("utf-8")
+                content_blocks.append({
+                    "type": "input_audio",
+                    "input_audio": {
+                        "data": b64,
+                        "format": format_map.get(mime_type, "wav")
+                    }
+                })
+
+            elif mime_type == "application/pdf":
+                try:
+                    from PyPDF2 import PdfReader
+                    reader = PdfReader(io.BytesIO(file_data))
+                    text_parts = []
+                    for page in reader.pages:
+                        page_text = page.extract_text()
+                        if page_text:
+                            text_parts.append(page_text)
+                    combined = "\n\n".join(text_parts)
+                    content_blocks.append({
+                        "type": "text",
+                        "text": f"File: {filename}\n\n```pdf\n{combined}\n```"
+                    })
+                except Exception as e:
+                    content_blocks.append({
+                        "type": "text",
+                        "text": f"[Error extracting PDF '{filename}': {e}]"
+                    })
+
+            else:
+                try:
+                    content_blocks.append({
+                        "type": "text",
+                        "text": f"File: {filename}\n\n```{file_data.decode('utf-8')}```"
+                    })
+                except UnicodeDecodeError:
+                    content_blocks.append({
+                        "type": "text",
+                        "text": f"[Binary file: {filename}]"
+                    })
+
+            filenames.append(filename)
+
+        if content_blocks:
+            message_dict["content"] = content_blocks
+            message_dict["_metadata"] = {"filenames": filenames}
+            return message_dict
+
+        return {"role": "user", "content": message}
+
+    def format_message(self, orig_message: dict):
+        formatted = ""
+
+        message = dict(orig_message)
+
+        role = message.get("role")
+
+        show_reasoning = self.config.get("show_reasoning")
+        reasoning_content = None
+
+        if role in ("user", "assistant"):
+            if show_reasoning:
+                reasoning_content = message.get("reasoning_content")
+                if reasoning_content:
+                    formatted += f"**Reasoning:**\n{reasoning_content}\n\n"
+
+            content = message.get("content")
+            if content:
+                if reasoning_content and show_reasoning:
+                    formatted += "**Conclusion**:\n"
+
+                formatted += f"{content}\n\n"
+
+        if role == "assistant":
+            if message.get("tool_calls"):
+                for tool_call in message.get("tool_calls"):
+                    formatted += self.tc_manager.display_call(tool_call)+"\n"
+
+                formatted += "\n\n"
+
+        if role == "tool":
+            formatted = "processing results.."
+
+        message["content"] = formatted.strip()
+
+        return message
+
+    async def _render_tool_token(self, name: str, args_str: str) -> str:
+        # 1. Handle tool switch
+        if name != self._tool_state["name"]:
+            self._tool_state["name"] = name
+            self._tool_state["raw_args"] = ""
+            self._tool_state["keys_state"] = {}
+            return f"\n**Calling tool: {name}**"
+
+        # 2. Parse partial JSON - handles incomplete/malformed streams
+        delta = ""
+        try:
+            data = partial_json_parser.loads(args_str, allow_partial=partial_json_parser.Allow.ALL)
+            if not isinstance(data, dict):
+                data = {}
+        except Exception as e:
+            data = {}
+
+        # 3. Delta comparison
+        for key, value in data.items():
+            val_str = json.dumps(value) if isinstance(value, (dict, list)) else str(value)
+            prev_val = self._tool_state["keys_state"].get(key)
+
+            if prev_val is None:
+                delta += f"\n**{key}**: "
+                if val_str:
+                    delta += val_str
+                self._tool_state["keys_state"][key] = val_str
+            elif val_str != prev_val:
+                delta += val_str[len(prev_val):] if val_str.startswith(prev_val) else val_str
+                self._tool_state["keys_state"][key] = val_str
+
+        self._tool_state["raw_args"] = args_str
+        return delta
+
+    # -------------------------
+    # The actual sending logic
+    # -------------------------
+    async def _send_preprocess(self, message: str, files: list = None, commands_authorized = False):
+        """
+        internal helper function so that send() and send_stream()
+        both use many of the same code paths and i don't have to keep maintaining each one individually
+        """
         await self._set_as_active_channel()
+        user_message = message
 
-        # process any /commands
-        if isinstance(message.get("content"), str):
-            cmd_response = None
-            is_cmd = message.get("content", "").strip().lower().startswith(
+        # sometimes legacy parts of the openlumara framework still send dicts.
+        # that is not supposed to happen, and i need to find the code that does it
+        # so, TODO: find the legacy code that calls channel.send()/send_stream() with dicts
+        # but for now.. to avoid breaking everything, i'll convert
+        if isinstance(user_message, dict):
+            user_message = user_message.get("content", "")
+
+        if isinstance(user_message, str):
+            # process any commands
+            is_cmd = user_message.strip().lower().startswith(
                 core.config.get("core", "cmd_prefix").strip().lower()
             )
 
-            if is_cmd and message.get("role", "user") == "user":
+            if is_cmd:
                 try:
-                    cmd_response = await self.commands.process_input(message, authorized=commands_authorized)
+                    cmd_response = await self.commands.process_input(user_message, authorized=commands_authorized)
                 except Exception as e:
-                    self.log_error("error while executing command", e)
-                    return {"role": "assistant", "content": str(e)}
+                    self.log(self.name, f"Error while executing command: {core.detail_error(e)}")
+                    # no need to add a message to context here, as process_input() already does that
+                    return {"type": "error", "content": str(core.detail_error(e))}
 
                 if cmd_response:
-                    return {"role": "assistant", "content": cmd_response}
+                    # process_input already adds to context
+                    return {"type": "cmd_response", "content": str(cmd_response), "is_cmd": True}
                 else:
-                    return {"role": "assistant", "content": "BLANK"}
+                    return {"type": "blank"}
 
-        # if not a command, send the message to the AI and return it's response
+            # apply any on_user_message() hooks
+            for module_name, module in self.manager.modules.items():
+                if hasattr(module, "on_user_message"):
+                    try:
+                        if asyncio.iscoroutinefunction(module.on_user_message):
+                            usr_msg_result = await module.on_user_message(user_message)
+                        else:
+                            usr_msg_result = module.on_user_message(user_message)
+                    except Exception as e:
+                        self.log("module error", f"{module_name}: in on_user_message(): {core.detail_error(e)}")
 
-        # attempt auto-reconnect once
-        if not self.manager.API.connected:
-            reconnected = await self.manager.API.connect()
-            if not reconnected:
-                return {"role": "assistant", "content": self._get_disconnection_message()}
+                    if usr_msg_result is False:
+                        await self.context.chat.messages.add({"role": "user", "content": user_message})
+                        return {"type": "module_intercept"}
+                    elif usr_msg_result is not None:
+                        user_message = usr_msg_result
 
-        # add sent message to context
-        add_success = await self.context.chat.add(message)
+        # apply multimodal content if applicable
+        user_message_processed = await self._process_multimodal(message=user_message, files=files)
 
+        # and add the user's message to context
+        add_success = await self.context.chat.messages.add(user_message_processed)
         if not add_success:
-            return None
+            return {"type": "error", "content": "Unknown error while adding user message to context"}
 
-        # run module event hooks
-        for module_name, module in self.manager.modules.items():
-            if hasattr(module, "on_user_message"):
-                usr_msg_result = True
+        # reconnect if needed
+        result = await self.manager.API.attempt_connect()
+        if result is not True:
+            return {"type": "error", "content": str(result)}
 
-                try:
-                    if asyncio.iscoroutinefunction(module.on_user_message):
-                        usr_msg_result = await module.on_user_message(message.get("content", ""))
-                    else:
-                        usr_msg_result = module.on_user_message(message.get("content", ""))
-                except Exception as e:
-                    self.log("module error", f"{module_name}: in on_user_message(): {core.detail_error(e)}")
-
-                if usr_msg_result is False:
-                    # when returning False from the user message hook,
-                    # we stop the chain here, allowing the hook to basically intercept the message
-                    # and prevent the AI from returning its own response to the message
-                    return
-
-        # then get the full context window
+        # build the context window
         context = await self.context.get(system_prompt=True, end_prompt=True)
 
-        # and then request the AI response and add it to context
-        response = await self.manager.API.send(context)
+        # and return the results for use in send() and send_stream()
+        return {"type": "ready", "user_message": user_message_processed.get("content"), "context": context}
 
-        # handle any errors
-        if isinstance(response, dict) and "error" in response:
-            await self.context.chat.pop()  # remove the user message we just added
-            error_msg = response.get("message", "Unknown error occurred")
-            return {"role": "assistant", "content": f"API Error: {error_msg}\n\nUse /connect to retry."}
-
-        # make a copy of the response message and edit it
-        assistant_message = dict(response)
-        assistant_message["role"] = "assistant"
-
-        tool_calls = assistant_message.get("tool_calls")
-
-        # convert any toolcalls to a dict so that JSON serialization doesnt die
-        if tool_calls:
-            toolcalls_converted = []
-
-            for tool_call in tool_calls:
-                if not isinstance(tool_call, dict):
-                    tool_call = tool_call.model_dump(warnings=False)
-                toolcalls_converted.append(tool_call)
-
-            assistant_message["tool_calls"] = toolcalls_converted
-
-        if tool_calls:
-            # process() does all the toolcalling, but it also returns the raw toolcall stream for our own use
-            async for sub_token in self.tc_manager.process(
-                assistant_message,
-                push=True
-            ):
-                # push handles all the output
-                pass
-
-        # add to context
-        if not tool_calls:
-            await self.context.chat.add(assistant_message)
+    async def _send_postprocess(self, assistant_message):
+        await self.context.chat.messages.add(assistant_message)
 
         # run module event hooks
         for module_name, module in self.manager.modules.items():
@@ -341,94 +499,122 @@ class Channel:
                 except Exception as e:
                     self.log("module error", f"{module_name}: in on_assistant_message(): {core.detail_error(e)}")
 
+    def _build_final_assistant_message(self, final_content = None, final_reasoning = None):
+        # python has a bug where, if you pass a default value in the function definition,
+        # all calls to the function then share the reference to that value,
+        # which, well, pollutes future calls...
+
+        if final_content is None:
+            final_content = []
+        if final_reasoning is None:
+            final_reasoning = []
+
+        assistant_message = {
+            "role": "assistant",
+            "content": "".join(final_content)
+        }
+
+        if final_reasoning:
+            assistant_message["reasoning_content"] = "".join(final_reasoning)
+
+        return assistant_message
+
+    async def throw_stream_error(self, error):
+        """
+        helper method to make throwing errors during a stream consistent
+        since it's easy to forget to add an error to context in addition to yielding it..
+        """
+        # add the error message to context
+        await self.context.chat.messages.add({"role": "assistant", "content": f"Error: {error}"})
+
+        # and pass it on to yield
+        return {"type": "error", "content": error}
+
+    async def send(self, message: str, files: list = None, commands_authorized=False):
+        """sends a message to the AI from within the current channel"""
+
+        # preprocessing (API connection logic, command processing, user message module hooks, etc)
+        processed = await self._send_preprocess(message, files, commands_authorized)
+        match processed["type"]:
+            case "cmd_response":
+                return self.format_message({"role": "assistant", "content": processed["content"]})
+            case "blank":
+                return
+            case "module_intercept":
+                return
+            case "error":
+                return {"role": "assistant", "content": processed["content"]}
+
+        # request the AI response and add it to context
+        response = await self.manager.API.send(processed["context"])
+
+        # handle any errors
+        if isinstance(response, core.api.APIError):
+            self.log("api", response)
+            return {"role": "assistant", "content": str(response)}
+
+        # make a copy of the response message and edit it
+        assistant_message = dict(response)
+        assistant_message["role"] = "assistant"
+
+        tool_calls = assistant_message.get("tool_calls")
         if tool_calls:
+            # process() does all the toolcalling, but it also returns the raw toolcall stream for our own use
+            async for sub_token in self.tc_manager.process(
+                assistant_message,
+                push=True
+            ):
+                # push handles all the output
+                pass
+
             return None
 
+        # postprocessing ( mainly assistant message module hooks, but this can be extended later :) )
+        await self._send_postprocess(assistant_message)
         return self.format_message(assistant_message)
 
-    async def send_stream(self, message: dict, commands_authorized=False):
+    async def send_stream(self, message: str, files: list = None, commands_authorized=False):
         """sends a message to the AI from within the current channel, streaming version"""
 
-        # as soon as user sends a message in this channel, set current channel (tracked in the manager) to this one
-        await self._set_as_active_channel()
+        # preprocessing (API connection logic, command processing, user message module hooks, etc)
+        # this also adds the user's message to context, so we don't need to do that in this function
+        processed = await self._send_preprocess(message, files, commands_authorized)
 
-        user_message = message #alias for readability
-
-        # process any /commands
-        if isinstance(message.get("content"), str):
-            cmd_response = None
-            is_cmd = message.get("content", "").strip().lower().startswith(
-                core.config.get("core", "cmd_prefix").strip().lower()
-            )
-
-            if is_cmd and message.get("role", "user") == "user":
-                try:
-                    cmd_response = await self.commands.process_input(user_message, authorized=commands_authorized)
-                except Exception as e:
-                    self.log_error("error while executing command", e)
-                    yield {"type": "content", "content": str(e)}
-                    return
-
-                if cmd_response:
-                    # insert and return the command response without sending it to the AI
-                    for word in cmd_response:
-                        yield {"type": "content", "content": word}
-                    return
-
-        # attempt auto-reconnect once
-        if not self.manager.API.connected:
-            reconnected = await self.manager.API.connect()
-            if not reconnected:
-                yield {"type": "content", "content": self._get_disconnection_message()}
+        match processed["type"]:
+            case "cmd_response":
+                # immediately yield both the user message and the command response, so that they both display
+                yield {"type": "user_message", "content": message, "is_cmd": True}
+                yield {"type": "content", "content": processed["content"], "is_cmd": True}
+                return
+            case "blank":
+                yield {"type": "content", "content": "BLANK"}
+                return
+            case "module_intercept":
+                # let modules intercept messages, stopping the rest of the chain and doing whatever with the contents of the message
+                # in on_user_message()
+                return
+            case "error":
+                # immediately yield the user message
+                yield {"type": "user_message", "content": message, "is_cmd": True}
+                yield await self.throw_stream_error(processed["content"])
                 return
 
-        # add user's message to context
-        add_success = await self.context.chat.add(user_message)
-        if not add_success:
-            return
+        user_message = processed.get("user_message") #alias for readability
 
+        # yield user message as a special token for display in UI's (because user message can be modified by module hooks)
+        yield {"type": "user_message", "content": user_message}
+        
         # estimate tokens used for user message
         user_message_token_estimation = 0
-        if self.context.chat.using_api_token_data:
-            # if using API token count
-            user_msg_tokens = await self.context.chat.count_tokens([user_message])
-            user_message_token_estimation = await self.context.chat.get_token_usage()+user_msg_tokens
-
-            # add to existing API token count
-            await self.context.chat.set_token_usage(user_message_token_estimation)
-        else:
-            # just fully estimate
-            try:
-                user_message_token_estimation = await self.context.chat.count_tokens()
-            except Exception as e:
-                self.log_error("Error while trying to estimate token use", e)
-                # abort
-                return
+        try:
+            user_message_token_estimation = await self.context.get_total_tokens()
+        except Exception as e:
+            self.log_error("Error while trying to estimate token use", e)
+            yield await self.throw_stream_error(f"Error while trying to estimate token use: {core.detail_error(e)}")
+            return
 
         # yield so it updates throughout all channels that display token count
         yield {"type": "token_usage", "content": user_message_token_estimation, "source": "estimation"}
-
-        # run module event hooks
-        for module_name, module in self.manager.modules.items():
-            if hasattr(module, "on_user_message"):
-                usr_msg_result = True
-
-                try:
-                    if asyncio.iscoroutinefunction(module.on_user_message):
-                        usr_msg_result = await module.on_user_message(message.get("content", ""))
-                    else:
-                        usr_msg_result = module.on_user_message(message.get("content", ""))
-                except Exception as e:
-                    self.log("module error", f"{module_name}: in on_user_message(): {core.detail_error(e)}")
-
-                if usr_msg_result is False:
-                    # when returning False from the user message hook,
-                    # we stop the chain here, allowing the hook to basically intercept the message
-                    # and prevent the AI from returning its own response to the message
-                    return
-
-        # get the new context window with the added message
-        context = await self.context.get(system_prompt=True, end_prompt=True)
 
         final_content = []
         final_reasoning = []
@@ -437,167 +623,92 @@ class Channel:
         fetched_token_usage = False
 
         # and stream the response to the caller of this method
-        async for token in self.manager.API.send_stream(context):
-            # always yield the token to the caller
-            yield token
+        try:
+            stream = self.manager.API.send_stream(processed.get("context"))
+        except Exception as e:
+            yield await self.throw_stream_error(f"Error while starting stream: {core.detail_error(e)}")
+            return
 
-            token_type = token.get("type")
+        try:
+            async for token in stream:
+                token_type = token.get("type")
 
-            # handle any errors
-            if token_type == "error":
-                error_data = token.get("content", {})
-                error_msg = error_data.get("message", "Unknown error")
-                yield {"type": "content", "content": f"API Error: {error_msg}"}
+                # handle any errors
+                if token_type == "error":
+                    self.log(self.name, f"Error: {token.get('content')}")
+
+                    # add the content that has been accumulated so far, so that we don't lose incomplete messages
+                    assistant_message = self._build_final_assistant_message(final_content, final_reasoning)
+                    await self.context.chat.messages.add(assistant_message)
+
+                    yield await self.throw_stream_error(token.get("content"))
+                    return
+
+                # always yield the token to the caller
+                yield token
+
+                if token_type == "content":
+                    # this is a normal piece of streamed text
+                    final_content.append(token.get("content"))
+                elif token_type == "reasoning":
+                    final_reasoning.append(token.get("content"))
+                elif token_type == "tool_call_delta":
+                    # yay toolcall arg streaming!
+                    pass
+                elif token_type == "tool_calls":
+                    tool_calls_occurred = True
+                    toolcall_request = await self.tc_manager._build_recursive_request(token, final_content, final_reasoning)
+
+                    # the AI has decided to call a tool, so now we start the recursive toolcall loop (aka agentic loop)
+                    # AI calls tool -> gets response -> decides whether it needs to call more tools -> does so if needed -> gets response -> rinse and repeat
+                    async for sub_token in self.tc_manager.process(toolcall_request):
+                        if sub_token.get("type") == "final":
+                            # this is the final message in the recursive toolcalling loop, so we add it to context
+                            await self.context.chat.messages.add(sub_token.get("content"))
+
+                        yield sub_token
+                elif token_type == "tool":
+                    # this is a toolcall response.. we only need to yield it
+                    pass
+                elif token_type == "token_usage":
+                    # this is the final token usage count, usually emitted at the end of the stream
+                    token_usage = token.get("content")
+                    if isinstance(token_usage, int):
+                        # set the flag so that token counting is always using API data
+                        if not self.context.using_api_token_data:
+                            self.context.using_api_token_data = True
+
+                        # cache this in the chat's metadata
+                        await self.context.chat.set("token_usage", token_usage)
+
+                        fetched_token_usage = True
+        except asyncio.CancelledError:
+            # if the stream is cancelled at this level, we need to handle the accumulated content in a special way
+
+            if tool_calls_occurred:
+                # since at this point, tc_manager.process() has added a bunch of messages with content, reasoning, and toolcalls and their responses to context
+                # tc_manager.process() takes care of it, finalizing the last message and adding it to context
+                # so we just abort
                 return
-
-            if token_type == "content":
-                # this is a normal piece of streamed text
-                final_content.append(token.get("content"))
-            elif token_type == "reasoning":
-                final_reasoning.append(token.get("content"))
-            elif token_type == "tool_call_delta":
-                # yay toolcall arg streaming!
+            else:
+                # otherwise, we actually want the normal assistant message adding path to be taken
                 pass
-            elif token_type == "tool_calls":
-                tool_calls_occurred = True
-
-                toolcall_request = await self.tc_manager._build_recursive_request(token, final_content, final_reasoning)
-
-                # we add the accumulated content tokens so far to the assistant_content argument
-                async for sub_token in self.tc_manager.process(toolcall_request):
-                    yield sub_token
-                # tc_manager.process() will loop until the AI no longer deems tool calls necessary
-            elif token_type == "tool":
-                # this is a toolcall response
-                pass
-            elif token_type == "token_usage":
-                # this is the final token usage count, usually emitted at the end of the stream
-                token_usage = token.get("content")
-                if isinstance(token_usage, int):
-                    # set the flag so that token counting is always using API data
-                    if not self.context.chat.using_api_token_data:
-                        self.context.chat.using_api_token_data = True
-
-                    # cache this so chat.get_token_usage() returns this value
-                    await self.context.chat.set_token_usage(token_usage)
-
-                    fetched_token_usage = True
+        except Exception as e:
+            yield await self.throw_stream_error(str(e))
 
         if not fetched_token_usage:
             # yield an estimated token usage if the API didn't provide one
-            yield {"type": "token_usage", "content": await self.context.chat.count_tokens(), "source": "estimation"}
+            yield {"type": "token_usage", "content": await self.context.get_total_tokens(), "source": "estimation"}
 
-        if not tool_calls_occurred and final_content: # don't add an extra message at the end of a toolcalling chain
-            # add the assistant's response to context
-            assistant_message = {
-                "role": "assistant",
-                "content": "".join(final_content)
-            }
+        # and finally, once the stream has completed, add the finished assistant message to context
+        if tool_calls_occurred:
+            # if tool calls occurred, we don't want the reasoning from the first message to be added to context
+            # (that would cause a duplicate)
+            # so we abort early
+            return
 
-            if final_reasoning:
-                assistant_message["reasoning_content"] = "".join(final_reasoning)
-
-            await self.context.chat.add(assistant_message)
-
-            # run module event hooks
-            for module_name, module in self.manager.modules.items():
-                if hasattr(module, "on_assistant_message"):
-                    try:
-                        if asyncio.iscoroutinefunction(module.on_assistant_message):
-                            await module.on_assistant_message(assistant_message.get("content", ""))
-                        else:
-                            module.on_assistant_message(assistant_message.get("content", ""))
-                    except Exception as e:
-                        # Always log full traceback for easier debugging
-                        self.log("module error", f"{module_name}: in on_assistant_message(): {core.detail_error(e)}")
-
-    def _render_tool_token(self, name: str, args_str: str) -> str:
-        delta = ""
-
-        # 1. Handle tool switch
-        if name != self._tool_state["name"]:
-            self._tool_state["name"] = name
-            self._tool_state["raw_args"] = ""
-            self._tool_state["keys_state"] = {}
-            return f"\n**Calling tool: {name}**\n"
-
-        # 2. Try parsing JSON for key-value formatting
-        data = {}
-        try:
-            # Try the fast/easy way first: full parse
-            parsed = json_repair.loads(args_str)
-            if isinstance(parsed, dict):
-                data = parsed
-            else:
-                # If it's not a dict, it might be a partial dict that json_repair 
-                # couldn't quite fix into a dict. Let's try the regex fallback.
-                raise ValueError("Not a dict")
-        except Exception:
-            # Fallback to robust partial parsing if json_repair fails to produce a dict
-            # This mimics the WebUI's ability to extract keys even from incomplete JSON
-            key_pattern = re.compile(r'"([^"\\]*(?:\\.[^"\\]*)*)"\s*:\s*')
-            matches = list(key_pattern.finditer(args_str))
-            
-            for i, match in enumerate(matches):
-                key = match.group(1)
-                value_start = match.end()
-                
-                # Determine the end of the value
-                if i + 1 < len(matches):
-                    next_match_start = matches[i+1].start()
-                    potential_value_str = args_str[value_start:next_match_start].rstrip().rstrip(',')
-                else:
-                    potential_value_str = args_str[value_start:]
-                
-                # Use json_repair to try and get the value by wrapping it in a dict
-                try:
-                    # Try to get the value by wrapping it in a dict
-                    repaired = json_repair.loads(f'{{"v": {potential_value_str}}}')
-                    if isinstance(repaired, dict) and "v" in repaired:
-                        data[key] = repaired["v"]
-                    else:
-                        # Fallback: strip quotes and trailing JSON structural characters
-                        val = potential_value_str.lstrip()
-                        if val.startswith('"'):
-                            val = val[1:]
-                        val = val.rstrip('"} ,]')
-                        data[key] = val
-                except Exception:
-                    # Final fallback: strip quotes and trailing JSON structural characters
-                    val = potential_value_str.lstrip()
-                    if val.startswith('"'):
-                        val = val[1:]
-                    val = val.rstrip('"} ,]')
-                    data[key] = val
-
-        # 3. Generate the delta based on the current (potentially partial) data
-        for key, value in data.items():
-            # Convert value to string for comparison and display
-            if isinstance(value, (dict, list)):
-                val_str = json.dumps(value)
-            else:
-                val_str = str(value)
-            
-            prev_val = self._tool_state["keys_state"].get(key)
-
-            if prev_val is None:
-                # New key: append header and current value
-                delta += f"\n**{key}**: "
-                if val_str:
-                    delta += val_str
-                self._tool_state["keys_state"][key] = val_str
-            elif val_str != prev_val:
-                # Existing key: append only the new part of the value
-                if val_str.startswith(prev_val):
-                    delta += val_str[len(prev_val):]
-                else:
-                    # If the value changed completely, just append the new value.
-                    # This is a fallback for delta channels.
-                    delta += val_str
-                self._tool_state["keys_state"][key] = val_str
-
-        self._tool_state["raw_args"] = args_str
-        return delta
+        assistant_message = self._build_final_assistant_message(final_content, final_reasoning)
+        await self._send_postprocess(assistant_message)
 
     async def format_stream_for_text(self, stream, chunk_size=None, use_markdown=True, strings: dict = None):
         """
@@ -637,6 +748,10 @@ class Channel:
             token_type = token.get("type")
             content = token.get("content", "")
 
+            if token_type == "error":
+                yield text_to_token(token.get("content"))
+                return
+
             # # collapse consecutive newlines
             try:
                 # format the reasoning to look all fancy
@@ -646,7 +761,7 @@ class Channel:
                     newline_str = "\n"
 
                 # collapse more than 2 newlines to just 2
-                content = re.sub(r'\n{3,}', '\n\n', content)
+                content = regex.sub(r'\n{3,}', '\n\n', content)
                 content = content.replace("\n", newline_str)
             except:
                 pass
@@ -700,21 +815,23 @@ class Channel:
             #     yield text_to_token(tool_result_str)
 
             if self.config.get("stream_tool_calls") and token_type == "tool_call_delta":
-                char_counter += len("\n")
-                yield text_to_token("\n")
-
                 # Extract the accumulated tool call from the delta
                 tc_list = token.get("tool_calls", [])
                 if tc_list:
                     tc = tc_list[0]
+                    func = tc.get("function")
+
                     # Render the partial/full tool call fancy style
-                    tool_delta_str = self._render_tool_token(tc.function.name, tc.function.arguments)
+                    tool_delta_str = await self._render_tool_token(func, func.get("arguments"))
 
                     # fix fake newlines
                     tool_delta_str = tool_delta_str.replace("\\n", "\n")
 
                     char_counter += len(tool_delta_str)
                     yield text_to_token(tool_delta_str)
+            elif token_type == "tool":
+                char_counter += len("\n\n")
+                yield text_to_token("\n\n")
             elif not self.config.get("stream_tool_calls") and token_type == "tool_calls":
                 char_counter += len("\n")
                 yield text_to_token("\n")
@@ -735,41 +852,22 @@ class Channel:
                 char_counter += len(content)
                 yield text_to_token(content)
 
-    async def run(self):
-        # stub, meant for derivative channels to override
-        pass
-
-    async def on_ready(self):
+    async def group_stream(self, stream):
         """
-        called when the entire framework has fully initialized
-        (when the message "[CORE] Startup complete" shows up)
+        groups incoming tokens into "turns" using the TurnCollector defined in core/turns.py
+
+        a turn is a group of assistant messages, such as reasoning, content, toolcalls, and so on,
+        that have all been grouped together into one object, for display in your preferred UI.
+
+        this used to be exclusive to the webUI, but i've ported it over to the core, so that it
+        can be reused across channels
         """
-        pass
+        async for partial_turn in self.turncollector.group_stream(stream):
+            yield partial_turn
 
-    async def on_push(self, message: dict):
-        raise NotImplementedError
-
-    async def on_install(self):
-        """Overridable method that triggers when the auto-installer installs the dependencies for a channel"""
-        pass
-    async def on_uninstall(self):
-        """Overridable method that triggers when the auto-installer uninstalls the dependencies for a channel"""
-        pass
-
-    async def push(self, message):
+    async def group_history(self):
         """
-        push a message to the push queue, which will instantly display it in all channels
+        takes a list of messages and turns it into turns that are identical to the ones shown by get_turns_stream()
+        for displaying message history in the same grouped turns format
         """
-
-        if not hasattr(self, "push_queue"):
-            return False
-
-        # message can be either a str or a dict.
-        # if dict, just use it as-is
-        # otherwise, turn it into an openAI message dict
-        if isinstance(message, dict):
-            await self.context.chat.add(message)
-            await self.push_queue.put(message)
-        else:
-            await self.context.chat.add({"role": "assistant", "content": str(message)})
-            await self.push_queue.put({"role": "assistant", "content": str(message)})
+        return await self.turncollector.group_history(await self.context.chat.messages.get())

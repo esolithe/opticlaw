@@ -1,0 +1,31 @@
+<div class="flex fullwidth">
+    <!-- Reasoning block -->
+    <template x-if="Object.hasOwn(message, 'reasoning_content') || message.type === 'reasoning'">
+        {% include 'chat/reasoning.html' %}
+    </template>
+
+    <!-- Content block -->
+    <template x-if="message.role === 'assistant' && (Object.hasOwn(message, 'content') || message.type === 'content') && typeof message.content === 'string'">
+        <div>
+            <template x-if="$store.chat.editingMessageIndex !== turn.last_message_index">
+                <div>
+                    <div class="content" x-html="message._metadata?.is_cmd ? escapeHtml(message.content) : renderMarkdown(message.content)" :class="{'command': message._metadata?.is_cmd}"></div>
+                </div>
+            </template>
+            <template x-if="$store.chat.editingMessageIndex === turn.last_message_index">
+                <div class="flex fullwidth editing">
+                    <textarea x-model="$store.chat.editContent" rows="3"></textarea>
+                    <div class="edit-actions">
+                        <button @click="$store.chat.saveEdit($store.chat.editingMessageIndex)">Save</button>
+                        <button @click="$store.chat.cancelEdit()">Cancel</button>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </template>
+
+    <!-- Tool calls block -->
+    <template x-if="Object.hasOwn(message, 'tool_calls') || message.type === 'tool_calls'">
+        {% include 'chat/toolcalls.html' %}
+    </template>
+</div>

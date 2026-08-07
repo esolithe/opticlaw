@@ -2,7 +2,7 @@ import core
 import json
 import json_repair
 import asyncio
-from concurrent.futures import ProcessPoolExecutor
+import copy
 
 class ToolcallManager:
     def __init__(self, channel):
@@ -12,10 +12,7 @@ class ToolcallManager:
         """format a toolcalling response into a nice string for display to the user"""
 
         try:
-            if hasattr(tool_data, 'function'):
-                func_name = getattr(tool_data.function, 'name', 'unknown')
-                raw_args = getattr(tool_data.function, 'arguments', '{}')
-            elif isinstance(tool_data, dict) and 'function' in tool_data:
+            if 'function' in tool_data:
                 func_name = tool_data['function'].get('name', 'unknown')
                 raw_args = tool_data['function'].get('arguments', '{}')
             else:
@@ -47,8 +44,6 @@ class ToolcallManager:
     def _repair_tool_calls(self, tool_calls):
         repaired_tool_calls = []
         for tool_call in tool_calls:
-            if not isinstance(tool_call, dict):
-                tool_call = tool_call.model_dump(warnings=False)
             raw_args = tool_call['function']['arguments']
 
             if isinstance(raw_args, dict):
@@ -76,7 +71,7 @@ class ToolcallManager:
         tool_calls = token.get("tool_calls")
 
         if tool_calls:
-            repaired_tool_calls = self._repair_tool_calls(tool_calls)
+            repaired_tool_calls = self._repair_tool_calls(copy.deepcopy(tool_calls))
             repaired_token = token.copy()
             repaired_token["tool_calls"] = repaired_tool_calls
             return repaired_token
@@ -116,7 +111,7 @@ class ToolcallManager:
         repaired_tool_calls = self._repair_tool_calls(assistant_message["tool_calls"])
 
         # add it to context
-        await self.channel.context.chat.add(assistant_message)
+        await self.channel.context.chat.messages.add(assistant_message)
 
         # push if needed
         if push:
@@ -157,7 +152,7 @@ class ToolcallManager:
                 ):
                     # don't allow disabled tools to be called
                     rejected_msg = json.dumps({"content": "That tool has been disabled by the user.", "status": "error"})
-                    await self.channel.context.chat.add({
+                    await self.channel.context.chat.messages.add({
                         "role": "tool",
                         "tool_call_id": tool_call_dict['id'],
                         "content": rejected_msg
@@ -183,7 +178,7 @@ class ToolcallManager:
                     func_response = await asyncio.wait_for(_run_tool(), timeout=timeout_val)
                     if func_response is None:
                         # bypass the usual response flow and just abort the chain
-                        return
+                        continue
 
                 except asyncio.TimeoutError as e:
                     err_msg = core.detail_error(e) if core.debug else str(e)
@@ -213,7 +208,7 @@ class ToolcallManager:
                     yield {"type": "tool", "tool_call_id": tool_call_dict['id'], "content": func_response_str}
 
                     # add the tool response to the context window
-                    await self.channel.context.chat.add(tool_response)
+                    await self.channel.context.chat.messages.add(tool_response)
 
                     # push it if needed
                     # if push:
@@ -225,7 +220,7 @@ class ToolcallManager:
                 )
 
         if self.channel.manager.API.cancel_request:
-            await self.channel.announce("toolcalling chain cancelled", "info")
+            await self.channel.push("toolcalling chain cancelled")
             return
 
         final_content = []
@@ -239,10 +234,6 @@ class ToolcallManager:
                 await self.channel.context.get(system_prompt=True, end_prompt=False),
                 tools=self.channel.manager.tools
             ):
-                if self.channel.manager.API.cancel_request:
-                    await self.channel.announce("toolcalling chain cancelled", "info")
-                    return
-
                 token_type = token.get("type")
 
                 if token_type == "content":
@@ -254,18 +245,10 @@ class ToolcallManager:
                 elif token_type in ["tool_call_delta", "tool", "tool_calls", "prompt_progress", "timings"]:
                     yield token
 
-                if token_type == "token_usage":
-                    usage = token.get("content")
-                    if usage is not None:
-                        # set the flag so that token counting is always using API data
-                        if not self.channel.context.chat.using_api_token_data:
-                            self.channel.context.chat.using_api_token_data = True
-
-                        await self.channel.context.chat.set_token_usage(usage)
-                        # yield it to the frontend so the token bar updates in real-time
-                        yield token
-
                 if token_type == "tool_calls":
+                    # re-calculate current token use and yield it
+                    yield {"type": "token_usage", "content": await self.channel.context.get_total_tokens()}
+
                     had_recursive_call = True
                     toolcall_request = await self._build_recursive_request(token, final_content, final_reasoning)
 
@@ -274,32 +257,30 @@ class ToolcallManager:
                         recursion_counter=recursion_counter,
                         push=push
                     ):
-                        if self.channel.manager.API.cancel_request:
-                            await self.channel.announce("toolcalling chain cancelled", "info")
-                            return
                         yield sub_token
 
-            # only add final message if we didn't make a recursive call
-            # (the innermost call handles adding the final message)
-            if not had_recursive_call:
-                final_content_str = "".join(final_content)
-                final_reasoning_str = "".join(final_reasoning)
+            # if we're finally out of the recursive call loop (so, this was the last toolcall)
+            # we return the final message for the caller (usually the channel) to do stuff with
+            if not had_recursive_call and (final_content or final_reasoning):
+                final_msg = {"role": "assistant", "content": "".join(final_content)}
+                if final_reasoning:
+                    final_msg["reasoning_content"] = "".join(final_reasoning)
 
-                if final_content_str or final_reasoning_str:
-                    final_msg = {"role": "assistant", "content": final_content_str}
+                yield {"type": "final", "content": final_msg}
 
-                    if final_reasoning_str:
-                        final_msg["reasoning_content"] = final_reasoning_str
+                # set the agentic loop marker so that context.py knows where to start removing reasoning from toolcall messages
+                self.channel.agentic_loop_start = len(await self.channel.context.chat.messages.get())-1
 
-                    await self.channel.context.chat.add(final_msg)
-                    self.channel.agentic_loop_start = len(await self.channel.context.chat.get())-1
+        except asyncio.CancelledError:
+            # cancellation during recursive toolcalling, so we just take the content/reasoning accumulated so far and add it to context
+            if final_content or final_reasoning:
+                final_msg = {"role": "assistant", "content": "".join(final_content)}
+                if final_reasoning:
+                    final_msg["reasoning_content"] = "".join(final_reasoning)
 
-                    if push:
-                        await self.channel.push(final_msg)
-
+                await self.channel.context.chat.messages.add(final_msg)
         except Exception as e:
             self.channel.log_error(f"Error while handling tool calls", e)
-            await self.channel.announce(
-                f"Error while handling tool calls: {e}",
-                "error"
+            await self.channel.push(
+                f"Error while handling tool calls: {e}"
             )

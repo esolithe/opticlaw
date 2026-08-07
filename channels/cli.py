@@ -10,11 +10,12 @@ import prompt_toolkit.key_binding
 import prompt_toolkit.shortcuts
 import prompt_toolkit.application
 import sys
+import shlex
 
 class Cli(core.channel.Channel):
     """Talk to your AI from the terminal! Auto-disables itself when ran as a background server."""
 
-    dependencies = ["prompt_toolkit"]
+    dependencies = ["prompt_toolkit", "partial-json-parser"]
 
     running = True
 
@@ -22,11 +23,11 @@ class Cli(core.channel.Channel):
         "show_reasoning": {
             "description": "Whether to show the model's internal reasoning process within sent messages. Works in both streaming mode and non-streaming mode",
             "default": False
+        },
+        "stream_tool_calls": {
+            "description": "Whether to stream tool call arguments as they are written by the AI. Extremely useful when using toolcalls with long content, such as when using the Coder to write code",
+            "default": False
         }
-        # "stream_tool_calls": {
-        #     "description": "Whether to stream tool call arguments as they are written by the AI. Extremely useful when using toolcalls with long content, such as when using the Coder to write code",
-        #     "default": False
-        # }
     }
 
     def _setup_style(self):
@@ -63,26 +64,59 @@ class Cli(core.channel.Channel):
         # Create a fresh renderer for this message session
         currently_reasoning = False
 
+        # special commands like /quit
+        message_after = None
+
+        words = shlex.split(msg)
+        cmd_prefix = core.config.get("core", "cmd_prefix")
+        cmd = words[0][len(cmd_prefix):]
+
+        if cmd in ("quit", "exit"):
+                print("Exiting..")
+                await self.manager.shutdown()
+                return
+        elif cmd == "help":
+            # append the extra commands to the /help
+            message_after = """
+---
+/quit           quits the program
+/exit           quits the program
+""".strip()
+
         # display sending indicator
         print("sending..", end="", flush=True)
 
         first_token_received = False
+        processing_prompt = False
         async for token in self.format_stream_for_text(
-            self.send_stream({"role": "user", "content": msg}, commands_authorized=True),
+            self.send_stream(msg, commands_authorized=True),
             use_markdown=False
         ):
-            if not first_token_received:
-                # remove sending indicator using \r
-                print("\r", end="", flush=True)
-                first_token_received = True
-
             token_type = token.get("type")
             content = token.get("content", "")
 
-            if token_type in ["content", "reasoning"]:
+            if token_type == "error":
+                print()
+                self.log(self.name, f"Error: {content}")
+            elif token_type == "prompt_progress":
+                print("\rprocessing your request..", end="", flush=True)
+                processing_prompt = True
+            elif token_type in ["content", "reasoning"]:
+                if not first_token_received:
+                    # remove sending indicator using \r
+                    process_padding = 25 if processing_prompt else 0 # 25 is the length of "processing your request.."
+
+                    print("\r"+" "*process_padding, end="", flush=True)
+                    print("\r", end="", flush=True)
+
+                    processing_prompt = False
+                    first_token_received = True
+
                 print(content, end="", flush=True)
 
-        print()
+        if message_after:
+            print(message_after)
+
         print()
 
     async def run(self):

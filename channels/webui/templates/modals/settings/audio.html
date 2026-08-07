@@ -1,0 +1,74 @@
+<!-- AUDIO SETTINGS -->
+<template x-if="activeCategory === 'audio' && !activeModule && !activeChannel">
+    <div>
+        <!-- Sound Effects Section -->
+        <h3 class="section-title" x-text="$store.settings.categories.audio.title"></h3>
+        <p class="section-desc" x-text="$store.settings.categories.audio.description"></p>
+
+        <hr>
+
+        <!-- Volume -->
+        <div class="item">
+            <div class="row">
+                <label class="label">Volume</label>
+                <input type="range" min="0" max="100" :value="$store.audio.volume*100"
+                       @input="$store.audio.setVolume(parseInt($event.target.value) / 100)">
+                <span class="label right" x-text="Math.round($store.audio.volume * 100) + '%'"></span>
+            </div>
+        </div>
+
+        <!-- Token Generation Volume -->
+        <div class="item">
+            <div class="row">
+                <label class="label">Token Generation Volume</label>
+                <input type="range" min="0" max="100" :value="$store.audio.tokenVolume*100"
+                       @input="$store.audio.setTokenVolume(parseInt($event.target.value) / 100)">
+                <span class="label right" x-text="Math.round($store.audio.tokenVolume * 100) + '%'"></span>
+            </div>
+        </div>
+
+        <!-- Token Generation Sound Frequency -->
+        <div class="item">
+            <div class="row">
+                <label class="label">Token Generation Sound Frequency</label>
+                <input type="range" min="100" max="9000" step="100" :value="$store.audio.tokenFreq"
+                       @input="$store.audio.setTokenFreq(parseInt($event.target.value))">
+                <span class="label right" x-text="$store.audio.tokenFreq + ' Hz'"></span>
+            </div>
+        </div>
+
+        <!-- Sound Files -->
+        <template x-for="soundId in ['send_message', 'response_start', 'processing', 'token', 'completion', 'reasoning_end']" :key="soundId">
+            <div class="item">
+                <div class="toggle-row">
+                    <label class="label" x-text="soundId.charAt(0).toUpperCase() + soundId.slice(1).replace('_', ' ',) + ' Sound'"></label>
+                    <button type="button" :class="['toggle', $store.audio.sounds[soundId + 'SoundEnabled'] === true ? 'toggle-on' : 'toggle-off']"
+                            @click="$store.audio.setSoundEnabled(soundId, !$store.audio.sounds[soundId + 'SoundEnabled'])">
+                    </button>
+                </div>
+
+                <div class="item">
+                    <p class="description" x-text="$store.audio.sounds[soundId + 'SoundName'] || 'Using generated sound'"></p>
+                </div>
+
+                <div class="item">
+                    <input type="file" accept="audio/*" @change="$store.audio.handleSoundUpload($event, soundId)">
+                    <template x-if="$store.audio.sounds[soundId + 'SoundData']">
+                        <div class="actions" style="display: inline-flex; gap: 8px; vertical-align: middle;">
+                            <button type="button" class="btn" x-show="$store.audio.sounds[soundId + 'SoundData']"
+                                    @click="previewSound(soundId)">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                                </svg>
+                                <span>Play</span>
+                            </button>
+                            <button type="button" class="btn" @click="$store.audio.clearSound(soundId)">
+                                Clear
+                            </button>
+                        </template>
+                    </div>
+                </div>
+            </div>
+        </template>
+    </div>
+</template>

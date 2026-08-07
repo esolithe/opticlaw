@@ -1,0 +1,145 @@
+<template x-if="activeCategory === 'appearance' && !activeModule && !activeChannel">
+    <div class="settings-section">
+        <h3 class="section-title" x-text="$store.settings.categories.appearance.title"></h3>
+        <p class="section-desc" x-text="$store.settings.categories.appearance.description"></p>
+
+        <hr>
+
+        <!-- Theme Controls Row -->
+        <h4>Color Theme</h4>
+        <div class="theme-controls-row" x-init="$nextTick(() => { 
+            const store = Alpine.store('theme'); 
+            if (store.family && $refs.themeSelect) { 
+                $refs.themeSelect.value = store.family; 
+            }
+        })">
+            <div class="theme-dropdown-wrapper">
+                <select x-ref="themeSelect" x-model="Alpine.store('theme').family" @change="selectThemeFamily($store.theme.family)" class="theme-select">
+                    <template x-for="group in getThemeGroups()" :key="group">
+                        <optgroup :label="getThemeGroupName(group)">
+                            <template x-for="theme in getThemeFamilies().groups[group]" :key="theme.name">
+                                <option :value="theme.name" x-text="formatThemeName(theme.name)"></option>
+                            </template>
+                        </optgroup>
+                    </template>
+                    <template x-if="getThemeFamilies().others.length > 0">
+                        <optgroup label="Other">
+                            <template x-for="theme in getThemeFamilies().others" :key="theme.name">
+                                <option :value="theme.name" x-text="formatThemeName(theme.name)"></option>
+                            </template>
+                        </optgroup>
+                    </template>
+                </select>
+            </div>
+
+            <!-- Mode Toggle -->
+            <div class="theme-mode-toggle">
+                <button type="button" 
+                        @click="toggleThemeMode(false)" 
+                        :class="{ active: themeMode === 'dark' }"
+                        :disabled="!themeHasMode('dark')"
+                        class="mode-button"
+                        title="Dark mode">
+                    {% include 'svg/moon.svg' %}
+                </button>
+                <button type="button" 
+                        @click="toggleThemeMode(true)" 
+                        :class="{ active: themeMode === 'light' }"
+                        :disabled="!themeHasMode('light')"
+                        class="mode-button"
+                        title="Light mode">
+                    {% include 'svg/sun.svg' %}
+                </button>
+            </div>
+        </div>
+        
+        
+        <!-- Typography Settings -->
+        <div class="typography-section">
+            <h4>Typography</h4>
+            
+            <!-- Font Family -->
+            <div class="setting-item">
+                <select name="font-family" x-model="fontFamily" @change="handleFontChange($event.target.value)">
+                    <option value="default">System Default</option>
+                    <option value="Arial">Arial</option>
+                    <option value="Helvetica">Helvetica</option>
+                    <option value="Calibri">Calibri</option>
+                    <option value="Segoe UI">Segoe UI</option>
+                    <option value="Georgia">Georgia</option>
+                    <option value="Verdana">Verdana</option>
+                    <option value="Consolas">Consolas</option>
+                    <option value="Courier New">Courier New</option>
+                    <option value="Inter">Inter</option>
+                    <option value="Roboto">Roboto</option>
+                    <option value="Roboto Mono">Roboto Mono</option>
+                    <option value="Lato">Lato</option>
+                    <option value="Open Sans">Open Sans</option>
+                    <option value="Ubuntu">Ubuntu</option>
+                    <option value="Poppins">Poppins</option>
+                    <option value="Montserrat">Montserrat</option>
+                    <option value="Nunito">Nunito</option>
+                    <option value="Source Sans 3">Source Sans 3</option>
+                    <option value="Inconsolata">Inconsolata</option>
+                    <option value="Raleway">Raleway</option>
+                    <option value="Quicksand">Quicksand</option>
+                    <option value="Comfortaa">Comfortaa</option>
+                    <option value="Fredoka">Fredoka</option>
+                    <option value="Pacifico">Pacifico</option>
+                    <option value="Lobster">Lobster</option>
+                    <option value="Dancing Script">Dancing Script</option>
+                    <option value="Caveat">Caveat</option>
+                </select>
+            </div>
+            
+            <!-- Font Size Slider -->
+            <div class="setting-item">
+                <div class="slider-header">
+                    <span class="slider-label">Font Size</span>
+                    <span class="slider-value" x-text="fontSize + 'px'"></span>
+                </div>
+                <input type="range" 
+                       x-model.number="fontSize" 
+                       min="12" 
+                       max="24"
+                       @input="handleFontSize($event.target.value)">
+            </div>
+            
+            <!-- Chat Width Slider -->
+            <div class="setting-item">
+                <div class="slider-header">
+                    <span class="slider-label">Chat Width</span>
+                    <span class="slider-value" x-text="chatWidth + '%'"></span>
+                </div>
+                <input type="range" 
+                       x-model.number="chatWidth" 
+                       min="20" 
+                       max="100"
+                       @input="handleChatWidth($event.target.value)">
+            </div>
+            
+            <!-- Message Width Slider -->
+            <div class="setting-item">
+                <div class="slider-header">
+                    <span class="slider-label">Message Width</span>
+                    <span class="slider-value" x-text="messageWidth + '%'"></span>
+                </div>
+                <input type="range" 
+                       x-model.number="messageWidth" 
+                       min="30" 
+                       max="100"
+                       @input="handleMessageWidth($event.target.value)">
+            </div>
+
+            <div class="item">
+                <div class="toggle-row">
+                    <label>Expand Reasoning by Default</label>
+                    <button class="toggle" type="button" :class="{ active: $store.ui.expandReasoning }" @click="$store.ui.expandReasoning = !$store.ui.expandReasoning">
+                    </button>
+                </div>
+                <span class="description">Whether to expand the thinking block by default. If you prefer not to see your AI's thoughts all the time, you can disable this. You can then still always expand the thought block!</span>
+            </div>
+        </div>
+
+    </div>
+</template>

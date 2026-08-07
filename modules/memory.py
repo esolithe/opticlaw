@@ -9,15 +9,18 @@ class Memory(core.module.Module):
     """Gives your AI a persistent memory system"""
 
     settings = {
-        "insert_system_prompt": {
+        "insert_nudge_prompt": {
             "default": False,
-            "description": "Whether to put extra instructions in the system prompt to help the AI autonomously use its memory system, so that it remembers things without you having to explicitely ask it to."
+            "description": "Whether to put extra instructions in the end prompt (after message history) to help the AI autonomously use its memory system, so that it remembers things without you having to explicitely ask it to."
         },
         "put_pinned_memories_in_system_prompt": {
             "description": "Whether to put the AI's pinned memories in the system prompt. Pinned memories are memories that you or the AI has decided it needs to remember at all times. You can pin a memory by asking your AI to pin it, or sometimes it'll decide to pin by itself if it has decided a memory is important enough. You can always ask it to unpin a memory you don't want pinned!",
             "default": True
         },
-        "max_pinned_memories": 20
+        "max_pinned_memories": {
+            "default": 20,
+            "depends": "put_pinned_memories_in_system_prompt"
+        }
     }
 
     async def on_ready(self):
@@ -35,9 +38,6 @@ class Memory(core.module.Module):
     async def on_system_prompt(self):
         pinned_str = ""
         automem_prompt = ""
-
-        if self.config.get("insert_system_prompt"):
-            automem_prompt = "This is your persistent memory system. You are responsible for managing your own long-term memory. You must proactively and autonomously decide to use these tools to maintain an accurate, up-to-date, and efficient record of the user, your own operational preferences, and important contextual facts. Do not wait for instructions to remember; if information is valuable for future interactions, store it immediately."
 
         if self.config.get("put_pinned_memories_in_system_prompt"):
             count = 1
@@ -60,6 +60,13 @@ class Memory(core.module.Module):
             return None
 
         return f"{pinned_str}{automem_prompt}"
+
+    async def on_end_prompt(self):
+        automem_prompt = None
+        if self.config.get("insert_nudge_prompt"):
+            automem_prompt = "You are responsible for managing your own long-term memory. You must proactively and autonomously decide to use the memory tools to maintain an accurate, up-to-date, and efficient record of the user, your own operational preferences, and important contextual facts. Do not wait for instructions to remember; if information is valuable for future interactions, store it immediately."
+
+        return automem_prompt or None
 
     async def create(self, content: str, tags: list, pinned: bool = False):
         """Creates a new persistent memory. Use for storing relevant info, preferences, or context for future interactions.
@@ -91,7 +98,8 @@ class Memory(core.module.Module):
         if tags:
             self._mem[index]["tags"] = tags
 
-        return self.result(self._mem.save())
+        self._mem.save()
+        return self.result(f"memory {id} edited")
 
     async def delete(self, id: str):
         """Deletes a memory. Use to prune irrelevant/redundant info. DANGEROUS: Ensure memory is truly obsolete before deleting."""
@@ -103,7 +111,8 @@ class Memory(core.module.Module):
         self._mem_deleted.save()
 
         self._mem.pop(index)
-        return self.result(self._mem.save())
+        self._mem.save()
+        return self.result(f"memory {id} deleted")
 
     async def pin(self, id: str):
         """Pins a memory to the top of your active context window. Use for critical identity, user preferences, or high-priority goals."""
@@ -112,7 +121,8 @@ class Memory(core.module.Module):
             return self.result("memory with that ID not found!")
 
         self._mem[index]["pinned"] = True
-        return self.result(self._mem.save())
+        self._mem.save()
+        return self.result(f"memory {id} pinned")
 
     async def unpin(self, id: str):
         """Unpins a memory to manage cognitive load. Use when a pinned memory is no longer high priority."""
@@ -121,7 +131,8 @@ class Memory(core.module.Module):
             return self.result("memory with that ID not found!")
 
         self._mem[index]["pinned"] = False
-        return self.result(self._mem.save())
+        self._mem.save()
+        return self.result(f"memory {id} unpinned")
 
     async def search(self, query: str, search_in_content: bool = False):
         """Searches memories by query. Use when you need to recall past info but don't know the exact ID."""

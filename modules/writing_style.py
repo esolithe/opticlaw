@@ -43,7 +43,8 @@ class WritingStyle(core.module.Module):
         },
         "custom_writing_flair": {
             "default": None,
-            "description": "Will only be used if you set writing flair to custom. Define a custom writing flair for your AI here!"
+            "description": "Define a custom writing flair for your AI here!",
+            "depends": {"writing_flair": "custom"}
         },
         "writing_length": {
             "default": "default",
@@ -154,7 +155,8 @@ class WritingStyle(core.module.Module):
         },
         "custom_mood": {
             "default": None,
-            "description": "Define a custom mood for the AI. Only used if mood is set to custom! Use simple descriptions of only a few words, such as \"happy\", \"sad\" and so on."
+            "description": "Define a custom mood for the AI. Use simple descriptions of only a few words, such as \"happy\", \"sad\" and so on.",
+            "depends": {"mood": "custom"}
         },
         "desire": {
             "default": "default",
@@ -172,17 +174,16 @@ class WritingStyle(core.module.Module):
         },
         "custom_desire": {
             "default": None,
-            "description": "Define a custom desire for the AI. Only used if desire is set to custom!"
+            "description": "Define a custom desire for the AI.",
+            "depends": {"desire": "custom"}
         }
     }
 
     async def on_system_prompt(self):
-        constraints = []
+        constraints = [""]
 
         style = self.config.get("writing_style")
         match style:
-            case "default":
-                constraints.append("") # so that writing flair is supported even with no style selected
             case "chat":
                 constraints.append("Style: Messaging app (Telegram/Discord).")
             case "chat with slang":
@@ -232,6 +233,10 @@ class WritingStyle(core.module.Module):
                 constraints[-1] += "Speak in 1337 (leet) language"
             case "morse code":
                 constraints[-1] += "Output all words in morse code format"
+
+        # if by now the first constraint is empty, just remove it
+        if len(constraints[0]) == 0:
+            constraints.pop(0)
 
         cap_style = self.config.get("capitalization_style")
         match cap_style:
@@ -356,7 +361,7 @@ class WritingStyle(core.module.Module):
                 constraints.append("Lists: No bold headers at start of items.")
 
         if self.config.get("forbid_em_dash"):
-            constraints.append("No Em dashes (—).")
+            constraints.append("Don't use `—`, use `-` instead")
 
         if self.config.get("forbid_markdown"):
             constraints.append("Don't use markdown")

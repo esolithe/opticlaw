@@ -1,0 +1,138 @@
+/* ==========================================================================
+ *  Base Styles & Reset
+ *  ========================================================================== */
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+/* Utility classes */
+.nopadding {
+    padding: 0 !important;
+}
+
+html, body {
+    height: 100%;
+    width: 100%;
+    font-family: var(--font-family);
+    font-size: var(--font-size-base);
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+}
+
+input, button, select, h1, h2, h3, textarea {
+    font-family: inherit;
+}
+
+div  {
+    &.flex {
+        display: flex;
+        flex-direction: column;
+        gap: var(--gap);
+    }
+    &.fullwidth {
+        width: 100%;
+    }
+}
+
+/* Pattern overlay for chat background */
+#chat::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-image: var(--bg-pattern);
+    background-size: var(--bg-pattern-size);
+    opacity: 0.3;
+    pointer-events: none;
+    z-index: 0;
+}
+
+/* alpine-specific fix that they officially recommend */
+[x-cloak] { display: none !important; }
+
+/* disabled element styling */
+*:disabled {
+    opacity: 0.5 !important;
+    cursor: not-allowed !important;
+}
+
+/* ==========================================================================
+ *  Modern Scrollbar Styling (Theme Aware)
+ *  ========================================================================== */
+
+/* Webkit browsers (Chrome, Safari, Edge) */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--scrollbar);
+    border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-hover);
+}
+
+::-webkit-scrollbar-corner {
+    background: transparent;
+}
+
+/* Firefox */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar) transparent;
+}
+
+/* ==========================================================================
+ *  Selection Styling
+ *  ========================================================================== */
+
+::selection {
+    background: color-mix(in srgb, var(--accent) 30%, transparent);
+    color: var(--text-primary);
+}
+
+/* ==========================================================================
+ *  Focus Ring Accessibility
+ *  ========================================================================== */
+
+:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+}
+
+/* ==========================================================================
+ *  Animation Utilities & Performance Optimizations
+ *  ========================================================================== */
+
+/* Smooth scroll behavior */
+html {
+    scroll-behavior: smooth;
+}
+
+/* Button press effect */
+button, .chat-item, .category-item, .tool-call-header {
+    transform-origin: center;
+}
+
+button:active, 
+.chat-item:active, 
+.category-item:active,
+.tool-call-header:active {
+    transform: scale(0.98);
+}

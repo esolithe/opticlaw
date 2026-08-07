@@ -11,7 +11,10 @@ class Lists(core.module.Module):
             "description": "Whether to put pinned lists in the system prompt. This will make your AI aware of pinned lists and their content at all times! So you can simply ask your AI to pin one of your lists, and then it will always know what's in it. Careful though, this can blow up context size fast, depending on the list!",
             "default": True
         },
-        "max_pinned_lists": 10
+        "max_pinned_lists": {
+            "default": 10,
+            "depends": "insert_system_prompt"
+        }
     }
 
     async def on_ready(self):
@@ -38,7 +41,7 @@ class Lists(core.module.Module):
         for cat, items in pinned_by_cat.items():
             output += f"## {cat}\n"
             for name, lst_items in items:
-                output += f"### {name}\n" + "\n".join(f"{i+1}. {it}" for i, it in enumerate(lst_items)) + "\n"
+                output += f"### {name}\n" + "\n".join(f"- {it}" for it in lst_items) + "\n"
         if unpinned_by_cat:
             output += "---\nlists that aren't pinned:\n"
             for cat, names in unpinned_by_cat.items():
@@ -47,10 +50,10 @@ class Lists(core.module.Module):
         return output
 
     def _verify_target(self, category, list_name):
-        if category not in self.data.keys():
+        if category not in self.data:
             return False
-
-        if list_name not in self.data[category].keys():
+            
+        if list_name not in self.data.get(category, {}):
             return False
 
         return True
@@ -146,11 +149,7 @@ class Lists(core.module.Module):
         if not self._verify_target(category, list_name):
             return self.result("that list doesn't exist")
 
-        output = ""
-        for index, list_item in enumerate(self.data[category][list_name].get("items")):
-                    output += f"{index+1}. {list_item}\n"
-
-        return self.result(output)
+        return self.result(self.data[category][list_name].get("items"))
 
     def _find_item(self, items: list, starts_with: str):
         for index, item in enumerate(items):
@@ -175,7 +174,7 @@ class Lists(core.module.Module):
         target_list = self.data[category][list_name]
 
         found_index = self._find_item(target_list["items"], item_starts_with)
-        if not found_index:
+        if found_index is None:
             return self.result("could not find that list item", False)
 
         target_list["items"][found_index] = item_content
@@ -190,7 +189,7 @@ class Lists(core.module.Module):
         target_list = self.data[category][list_name]
 
         found_index = self._find_item(target_list["items"], item_starts_with)
-        if not found_index:
+        if found_index is None:
             return self.result("could not find that list item", False)
 
         target_list["items"].pop(found_index)

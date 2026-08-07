@@ -16,8 +16,11 @@ class StorageList(list):
             path = core.get_data_path()
 
         self.path = core.sandbox_path(path, name)
-        self.name = os.path.basename(self.path)
+        self.name = name
         self.binary = False
+
+        # create path if it doesnt exist
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
 
         # cache for change detection
         self._last_modified = 0.0
@@ -114,7 +117,7 @@ class StorageList(list):
 
     def load(self, data=None):
         """load content from file or data argument"""
-        if data:
+        if data is not None:
             self.clear()
             self.extend(data)
             return self
@@ -147,7 +150,7 @@ class StorageList(list):
         if not TEMPORARY:
             self.load()
 
-        return super().get(*args)
+        return super().__getitem__(args[0])
 
 class StorageDict(dict):
     """subclassed dict that handles storage of data. supports a variety of storage formats."""
@@ -160,8 +163,11 @@ class StorageDict(dict):
 
         self.path = core.sandbox_path(path, name)
 
-        self.name = os.path.basename(self.path)
+        self.name = name
         self.binary = False
+
+        # create path if it doesnt exist
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
 
         # this is mainly for the config, so that we can still make changes in temporary mode
         # but who knows what it might be needed for in the future
@@ -365,7 +371,7 @@ class StorageDict(dict):
 
     def load(self, data=None):
         """load content from file or data argument"""
-        if data:
+        if data is not None:
             self.clear()
             self.update(data)
             return True
@@ -434,6 +440,9 @@ class StorageText:
             path = core.get_data_path()
 
         self.path = core.sandbox_path(path, name)
+
+        # create path if it doesnt exist
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
 
         self._data = ""
 

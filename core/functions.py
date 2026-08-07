@@ -44,7 +44,7 @@ def log_error(msg: str, e: Exception):
         tb = traceback.format_exception(e)
         core.manager.global_instance.log("error", f"{msg}: {detail_error(e)}\n{tb}")
 
-def get_path(path: str = ""):
+def get_path(path: str = "", sandbox=True):
     """get path relative to the project root directory. returns root path if no path is specified."""
     project_root = os.path.abspath(os.path.join(
         os.path.dirname(__file__),
@@ -59,7 +59,10 @@ def get_path(path: str = ""):
         return path
     else:
         # is a relative path, return it sandboxed to the project root
-        return sandbox_path(project_root, path)
+        if sandbox:
+            return sandbox_path(project_root, path)
+        else:
+            return os.path.join(project_root, path)
 
 def get_data_path(subpath=None):
     """get path to the data directory. contains all persistent data used by the framework"""
@@ -104,15 +107,18 @@ def validate_path_string(path: str) -> str:
 
     # Check for traversal and null bytes
     if ".." in decoded or "\x00" in decoded:
-        raise ValueError("Path traversal is not allowed")
+        raise ValueError(f"Path traversal is not allowed ({path})")
 
     return decoded
 
-def sandbox_path(base_path: str, requested_path: str) -> str:
+def sandbox_path(base_path: str, requested_path: str = None) -> str:
     """
     protects against path traversal attacks and the like
     """
     path = requested_path
+    if not requested_path:
+        # the base path is basically always the sandbox path, so um, yeah, no need to filter that
+        return base_path
 
     # we dont use os.path.normpath here because it resolves '..' and allows path traversal
     # so we do the cross-platform stuff manually instead....

@@ -1,0 +1,11 @@
+#main-wrapper {
+    display: flex;
+    flex-direction: row;
+    height: 100vh;
+    background-color: var(--bg-primary);
+}
+
+#modals {
+    flex: 1;
+}
+

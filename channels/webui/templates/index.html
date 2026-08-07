@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<!-- 
+    OpenLumara WebUI v{{ version }} by Rose22 (https://github.com/Rose22)
+    Copyright (C) 2026  Rose22
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+    ---
+
+    A manually written frontend for openlumara, re-coded from the ground up using libraries
+    such as Alpine.js. I chose alpine.js due to its lightweight-ness, and still being capable enough
+    to power this WebUI. You won't find React bloat here!
+
+    Uses FastAPI and Jinja2 on the backend, and separates HTML files into different components
+    that get included using Jinja2's include statement.
+    For a nice, clean codebase.
+
+    OpenLumara used to have a WebUI that was mostly AI-coded, but that's finally no longer the case!
+-->
+<html>
+    <head>
+        <title>{{ config.get('title') }}</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <link rel="manifest" href="/manifest.json" />
+
+        <!-- 
+            ### libraries ###
+        -->
+        <!-- text area autoresize plugin for Alpine.js -->
+        <script src="{{ url_for('assets', path='js/libs/alpine-autosize.min.js') }}"></script>
+
+        <!-- automatic animation plugin for Alpine.js -->
+        <script src="{{ url_for('assets', path='js/libs/alpine-animation.min.js') }}"></script>
+
+        <!-- intersect plugin for Alpine.js (allows lazy loading, keeping stuff unloaded until scrolled into the viewport) -->
+        <script src="{{ url_for('assets', path='js/libs/alpine-intersect.min.js') }}"></script>
+
+        <!-- DOMPurify (XSS protection) -->
+        <script src="{{ url_for('assets', path='js/libs/purify.min.js') }}"></script>
+
+        <!-- highlight.js (code syntax highlighter) -->
+        <script src="{{ url_for('assets', path='js/libs/highlight.min.js') }}"></script>
+
+        <!-- marked (markdown support) -->
+        <script src="{{ url_for('assets', path='js/libs/marked.min.js') }}"></script>
+
+        <!-- Alpine.js <3 (thank you for making a lightweight framework that fits perfectly with openlumara) -->
+        <script src="{{ url_for('assets', path='js/libs/alpine.min.js') }}" defer></script>
+
+        <!-- 
+            ### stylesheets ### 
+        -->
+        {% for file in css_files %}
+        <link rel="stylesheet" href="{{ url_for('assets', path='css/'+file) }}" />
+        {% endfor %}
+
+        <link rel="stylesheet" id="code-theme" href="{{ url_for('assets', path='css/code-themes/github-dark.css') }}">
+
+    </head>
+    <body>
+        <!-- 
+            we use alpine stores for data access across the app,
+            as putting every possible thing in one massive data object was no fun
+        -->
+        <div id="main" x-data="{}" @resize.window="
+            $store.ui.windowWidth = window.innerWidth;
+            $store.ui.isMobile = window.innerWidth <= 768;
+
+            $store.ui.showSidebar = !$store.ui.isMobile;
+        ">
+            <section id="main-wrapper">
+                {% if config.get("enable_sidebar") %}
+                    <section id="sidebar" 
+                        x-show="$store.ui.showSidebar"
+                        x-transition:enter="transition ease-out duration-200"
+                        x-transition:enter-start="-translate-x-full"
+                        x-transition:leave="transition ease-in duration-150"
+                        x-transition:leave-end="-translate-x-full"
+                    >
+                        <!-- 
+                        @click.away="$store.ui.showSidebar = false"
+                        -->
+                        {% include 'sidebar.html' %}
+                    </section>
+                {% endif %}
+
+                <section id="chat-window">
+                    {% include 'chat/index.html' %}
+                </section>
+            </section>
+
+            <section id="modals">
+                {% include 'modals/index.html' %}
+            </section>
+        </div>
+
+        <!-- utility functions used by everything else -->
+        {% for file in js_utils %}
+        <script src="{{ url_for('assets', path='js/utils/'+file) }}"></script>
+        {% endfor %}
+
+        <!-- javascript files -->
+        {% for file in js_files %}
+        <script src="{{ url_for('assets', path='js/'+file) }}"></script>
+        {% endfor %}
+
+        <!--
+            dynamically generated themes file
+
+            returns raw JSON which the frontend parses directly,
+            eliminating the need for eval() and JS wrapping.
+
+            it's easy to make your own theme!
+        -->
+
+        <!-- Alpine stores -->
+        {% for js_file in alpine_stores %}
+        <script src="{{ url_for('assets', path='js/stores/'+js_file) }}"></script>
+        {% endfor %}
+
+        <!-- and finally, initialize! -->
+        <script src="{{ url_for('assets', path='js/init.js') }}"></script>
+    </body>
+</html>

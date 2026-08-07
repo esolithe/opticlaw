@@ -18,7 +18,7 @@ class Manager:
     def __init__(self, cmdline_args):
         self._async_tasks = set()
         self.args = cmdline_args # store commandline args
-        self.API = core.api_client.APIClient(self) # connect later with .connect()
+        self.API = core.api.APIClient(self) # connect later with .connect()
         self.savedata = {}
 
         self.channels = {}
@@ -63,42 +63,58 @@ class Manager:
         if not self.args.disable_auto_installer:
             system_changed = False
             for chan_name in enabled_channels:
-                installed = await core.modules.install_module_deps(channels, chan_name, self)
-                if installed:
-                    newly_installed_channels.append(chan_name)
+                try:
+                    await core.modules.install_module_deps(channels, chan_name, self)
+                except Exception as e:
+                    core.log(chan_name, f"Error while installing channel dependencies: {core.detail_error(e)}")
+                    continue
+
+                newly_installed_channels.append(chan_name)
 
             if newly_installed_channels:
                 # reload config
                 core.config.load()
 
+        is_user_str = "user " if is_user_channels else ""
         channels_to_load = list(core.modules.load(channels, core.channel.Channel, filter=enabled_channels, reload=True))
 
         for channel in channels_to_load:
             # add an instance of the channel's class to self.channels
             channel_name = core.modules.get_name(channel)
             try:
-                storage[channel_name] = channel(self, is_user_channel=is_user_channels)
-
-                # run installation hook
-                if channel_name in newly_installed_channels:
-                    await storage[channel_name].on_install()
-
+                new_chan = channel(self, is_user_channel=is_user_channels)
+                await new_chan.init()
             except Exception as e:
-                print(f"[CORE] failed to load channel {channel_name}: {core.detail_error(e)}", file=sys.stderr, flush=True)
-                traceback.print_exc()
-                self.log(channel_name, f"failed to load channel: {core.detail_error(e)}")
+                core.log(channel_name, f"Error while loading channel: {core.detail_error(e)}")
+                continue
 
-            is_user_str = "user " if is_user_channels else ""
+            # run installation hook
+            if channel_name in newly_installed_channels:
+                try:
+                    await new_chan.on_install()
+                except Exception as e:
+                    print(f"[CORE] failed to load channel {channel_name}: {core.detail_error(e)}", file=sys.stderr, flush=True)
+                    traceback.print_exc()
+                    core.log(channel_name, f"Error while installing channel: {core.detail_error(e)}")
+                    continue
+
+            storage[channel_name] = new_chan
             self.log("core", f"loaded {is_user_str}channel : {channel_name}")
+
+        return True
 
     async def _load_modules(self, storage, modules, enabled_modules, is_user_modules=False):
         # install dependencies
         newly_installed_modules = []
         if not self.args.disable_auto_installer:
             for mod_name in enabled_modules:
-                installed = await core.modules.install_module_deps(modules, mod_name, self)
-                if installed:
-                    newly_installed_modules.append(mod_name)
+                try:
+                    await core.modules.install_module_deps(modules, mod_name, self)
+                except Exception as e:
+                    core.log(mod_name, f"Error while installing module dependencies: {core.detail_error(e)}")
+                    continue
+
+                newly_installed_modules.append(mod_name)
 
             if newly_installed_modules:
                 # reload config
@@ -106,22 +122,28 @@ class Manager:
 
         # import/load only the enabled modules
         for module in core.modules.load(modules, core.module.Module, filter=enabled_modules, reload=True):
-            try:
-                loaded_module = await self.add_module_class(module, is_user_module=is_user_modules)
+            loaded_module = await self.add_module_class(module, is_user_module=is_user_modules)
 
-                # run installation hook
-                if loaded_module.name in newly_installed_modules:
+            # run installation hook
+            if loaded_module.name in newly_installed_modules:
+                try:
                     await loaded_module.on_install()
+                except Exception as e:
+                    core.log(loaded_module.name, f"Error during module install: {core.detail_error(e)}")
+                    continue
 
+            try:
                 await loaded_module._start()
-                await self.load_module_tools(loaded_module)
-
-                storage[loaded_module.name] = loaded_module
-
-                is_user_str = "user " if is_user_modules else ""
-                self.log("core", f"loaded {is_user_str}module : {loaded_module.name}")
             except Exception as e:
-                self.log_error(f"could not load module {module.__name__}", e)
+                core.log(loaded_module.name, f"Error during module internal _start() method: {core.detail_error(e)}")
+                continue
+
+            await self.load_module_tools(loaded_module)
+
+            storage[loaded_module.name] = loaded_module
+
+            is_user_str = "user " if is_user_modules else ""
+            self.log("core", f"loaded {is_user_str}module : {loaded_module.name}")
 
     async def run(self):
         """main loop"""
@@ -196,6 +218,7 @@ class Manager:
             await self._load_channels(self.channels, user_channels, enabled_user_channels, is_user_channels=True)
 
         # make our instance accessible even without a reference
+        global global_instance
         global_instance = self
 
         # display any error messages that were emitted
@@ -255,7 +278,12 @@ class Manager:
             self._async_tasks.add(asyncio.create_task(channel._start_push_queue()))
 
         # Attempt API connection but don't fail if it doesn't work
-        # await self._initialize_api_connection()
+        """Initialize API connection"""
+        self.log("API", "Connecting..")
+
+        connected = await self.API.connect()
+        if isinstance(connected, core.api.APIError):
+            self.log("API", str(connected))
 
         # run everything
         self.log("core", "Startup complete")
@@ -265,6 +293,8 @@ class Manager:
             # actually run everything
             await asyncio.gather(*self._async_tasks, return_exceptions=should_swallow_exceptions)
         except KeyboardInterrupt:
+            pass
+        except asyncio.CancelledError:
             pass
         except Exception as e:
             if core.debug:
@@ -321,6 +351,7 @@ class Manager:
                     self.log_error(f"Error shutting down {channel_name}", e)
 
         # remove the global instance
+        global global_instance
         global_instance = None
 
         # Cancel all running tasks so gather() returns
@@ -343,6 +374,8 @@ class Manager:
         user_modules = core.config.config["user_modules"]
 
         toggled = False
+        new_state = False
+
         for module_list in [modules, user_modules]:
             enabled = module_list["enabled"]
             disabled = module_list["disabled"]
@@ -351,10 +384,12 @@ class Manager:
                 enabled.remove(module_name)
                 disabled.append(module_name)
                 toggled = True
+                new_state = False
             elif module_name in disabled:
                 disabled.remove(module_name)
                 enabled.append(module_name)
                 toggled = True
+                new_state = True
             else:
                 continue
 
@@ -363,17 +398,19 @@ class Manager:
 
             if autorestart:
                 if self.channel:
-                    await self.channel.push("restarting to apply module change..")
+                    await self.channel.push(f"{module_name.capitalize()} module {'enabled' if new_state else 'disabled'}. Restarting to apply change..")
                 await asyncio.sleep(0.1)
                 await self.channel.manager.restart()
 
-        return True
+        return toggled
 
     async def toggle_channel(self, channel_name: str, autorestart=True):
         channels = core.config.config["channels"]
         user_channels = core.config.config["user_channels"]
 
         toggled = False
+        new_state = False
+
         for channel_list in [channels, user_channels]:
             enabled = channel_list["enabled"]
             disabled = channel_list["disabled"]
@@ -382,10 +419,12 @@ class Manager:
                 enabled.remove(channel_name)
                 disabled.append(channel_name)
                 toggled = True
+                new_state = False
             elif channel_name in disabled:
                 disabled.remove(channel_name)
                 enabled.append(channel_name)
                 toggled = True
+                new_state = True
             else:
                 continue
 
@@ -394,11 +433,11 @@ class Manager:
 
             if autorestart:
                 if self.channel:
-                    await self.channel.push("restarting to apply change..")
+                    await self.channel.push(f"{channel_name.capitalize()} channel {'enabled' if new_state else 'disabled'}. Restarting to apply change..")
                 await asyncio.sleep(0.1)
                 await self.channel.manager.restart()
 
-        return True
+        return toggled
 
     async def reload_module(self, module_name: str):
         """
@@ -432,40 +471,6 @@ class Manager:
 
         return True
 
-    async def _initialize_api_connection(self):
-        """Initialize API connection with user-friendly error handling."""
-        self.log("API", "Connecting to AI..")
-
-        connected = await self.API.connect()
-        if not connected:
-            error = self.API.get_last_error() or "Unknown error"
-            self.log("API", f"Failed to connect: {error}")
-            self.log("API", "OpenLumara will continue in disconnected mode.")
-            self.log("API", "Use the /reconnect command to retry after fixing your configuration.")
-
-    async def reconnect_api(self):
-        """Manually trigger API reconnection. Returns status dict."""
-        self.log("API", "Attempting to reconnect...")
-
-        connected = await self.API.reconnect()
-        if connected:
-            self.log("API", "Reconnected successfully")
-            return {
-                "success": True,
-                "message": "Successfully connected to API"
-            }
-        else:
-            error = self.API.get_last_error() or "Unknown error"
-            return {
-                "success": False,
-                "error": error,
-                "action": "Please check your API settings and try again."
-            }
-
-    def get_api_status(self):
-        """Get current API connection status for display."""
-        return self.API.get_connection_status()
-
     async def get_system_prompt(self):
         # only run on_system_prompt if the manager has a channel reference
         if not self.channel:
@@ -478,7 +483,7 @@ class Manager:
 
         active_character = None
         if self.channel:
-            active_character = await self.channel.context.chat.get_data("character")
+            active_character = self.channel.context.chat.get("metadata").get("character")
 
         # automatically insert system prompts returned by modules (such as memory)
         sysprompt_top = []
@@ -545,7 +550,7 @@ class Manager:
         # don't return endprompt if characters module is active
         active_character = None
         if self.channel:
-            active_character = await self.channel.context.chat.get_data("character")
+            active_character = self.channel.context.chat.get("metadata").get("character")
 
         # automatically insert system prompts returned by modules (such as memory)
         histend_prompt = []
@@ -584,41 +589,6 @@ class Manager:
             return "\n\n".join(histend_prompt)
         else:
             return ""
-
-    async def get_status(self):
-        status_list = []
-        status_list.append("== server ==")
-
-        # API status section
-        api_status = self.get_api_status()
-        if api_status["connected"]:
-            status_list.append("API Status: Connected")
-        else:
-            status_list.append("API Status: Disconnected")
-            if api_status["error"]:
-                status_list.append(f"  Error: {api_status['error']}")
-            if not api_status["url_configured"]:
-                status_list.append("  Warning: API URL not configured")
-            if not api_status["key_configured"]:
-                status_list.append("  Warning: API key not configured")
-
-        status_list.append("API server: " + str(core.config.get("api").get("url", "Not configured")))
-        if "webui" in self.channels.keys():
-            webui_cfg = self.channels['webui'].config
-            status_list.append(f"WebUI: {webui_cfg.get('host')}:{webui_cfg.get('port')}")
-        status_list.append("AI model: " + str(self.API.get_model() or "Not set"))
-
-        if self.channel is not None:
-            status_list.append("")
-
-            status_list.append("== context size ==")
-            ctx_string = ""
-            context_size = await self.channel.context.get_size()
-            for key, value in context_size.items():
-                ctx_string += f"{key}: {value}\n"
-            status_list.append(ctx_string)
-
-        return status_list
 
     async def get_settings_structure(self):
         if not self.modules:

@@ -59,6 +59,9 @@ class APIClient():
 
         api_config = core.config.get("api", {})
 
+        if api_config.get("url") == "http://API_URL_HERE/v1":
+            return APIError("The API connection has not been set up yet! Please set up your API connection by either using the WebUI, the /config command, or editing the config file")
+
         # infinite timeout
         httpx_timeout = httpx.Timeout(
             connect=5.0,
@@ -162,7 +165,7 @@ class APIClient():
 
     def set_model(self, name: str):
         core.config.config["model"]["name"] = name
-        core.config.save()
+        core.config.config.save()
 
         return True
 

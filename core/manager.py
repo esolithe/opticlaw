@@ -3,6 +3,7 @@ import modules
 import os
 import sys
 import datetime
+import time
 import asyncio
 import json_repair
 import inspect
@@ -36,12 +37,23 @@ class Manager:
         self._restart_requested = False
         self._prevent_double_shutdown = False
 
+        self.started = False
+
     def _remove_async_task(self, task):
         self._async_tasks.discard(task)
         self.log("task", f"background task completed: {task.get_name()}")
 
     def log(self, category: str, message: str):
         """propagate the output to every channel"""
+        if (
+            not self.started
+            or
+            "cli" not in self.channels.keys()
+        ) and not core.quiet:
+            cat_str = rf"[{category.upper()}] " if category else ""
+            print(f"{cat_str}{message}", flush=True)
+            return
+
         for name, channel in self.channels.items():
             channel.on_log(category, message)
 
@@ -79,8 +91,13 @@ class Manager:
         channels_to_load = list(core.modules.load(channels, core.channel.Channel, filter=enabled_channels, reload=True))
 
         for channel in channels_to_load:
-            # add an instance of the channel's class to self.channels
             channel_name = core.modules.get_name(channel)
+
+            # skip loading the CLI channel if we don't have a terminal to output to
+            if channel_name == "cli" and not sys.stdout.isatty():
+                continue
+
+            # add an instance of the channel's class to self.channels
             try:
                 new_chan = channel(self, is_user_channel=is_user_channels)
                 await new_chan.init()
@@ -148,6 +165,8 @@ class Manager:
     async def run(self):
         """main loop"""
 
+        startup_timestamp = time.time()
+
         should_swallow_exceptions = (not core.debug)
         self._prevent_double_shutdown = False
 
@@ -168,6 +187,10 @@ class Manager:
             enabled_channels = ["cli"]
             enabled_user_channels = []
 
+        if (not enabled_channels and not enabled_user_channels):
+            print("ERROR: At least one channel must be enabled in the config! Try the `cli` channel for a basic terminal UI.", flush=True)
+            exit(1)
+
         # retrieve enabled modules from config
         enabled_modules = core.config.get("modules", "enabled", [])
         enabled_user_modules = core.config.get("user_modules", "enabled", [])
@@ -180,10 +203,6 @@ class Manager:
             enabled_modules = ["coder"]
             enabled_user_modules = []
 
-        if not enabled_channels:
-            print("ERROR: At least one channel must be enabled in the config! Try the `cli` channel for a basic terminal UI.", flush=True)
-            sys.exit(1)
-
         import channels
         import modules
 
@@ -192,9 +211,8 @@ class Manager:
         if enabled_user_modules:
             import user_modules
 
-        self.log("core", "Loading core channels..")
         if not core.quiet:
-            print("[CORE] Loading core channels..") # cheating here because at this point none of the channels are actually here yet lol
+            self.log("core", "Loading core channels..")
         await self._load_channels(self.channels, channels, enabled_channels)
 
         if not self.channel:
@@ -269,25 +287,40 @@ class Manager:
                 # reload config
                 core.config.load()
 
-        # start the channels (execute their .run() method)
-        for channel_name, channel in self.channels.items():
-            self.log("core", f"Starting channel {channel_name}")
-
-            await channel.on_ready()
-            self._async_tasks.add(asyncio.create_task(channel.run()))
-            self._async_tasks.add(asyncio.create_task(channel._start_push_queue()))
+        elapsed_timestamp = time.time() - startup_timestamp
+        self.log("core", f"Startup completed in {elapsed_timestamp:.2f}s")
+        self.log("", "-"*40)
 
         # Attempt API connection but don't fail if it doesn't work
-        """Initialize API connection"""
         self.log("API", "Connecting..")
 
         connected = await self.API.connect()
         if isinstance(connected, core.api.APIError):
             self.log("API", str(connected))
 
-        # run everything
-        self.log("core", "Startup complete")
-        self.log("", "-"*40)
+        # start the channels (execute their .run() method)
+        for channel_name, channel in self.channels.items():
+            if channel_name == "cli":
+                # skip so that we can load it as the last one manually at the end
+                continue
+
+            self.log("core", f"Starting channel: {channel_name}")
+
+            await channel.on_ready()
+            self._async_tasks.add(asyncio.create_task(channel.run()))
+            self._async_tasks.add(asyncio.create_task(channel._start_push_queue()))
+
+        # _load_channels() automatically detects if we're in a TTY or not, so if not,
+        # cli is not in the channels dict and this will be skipped
+        if "cli" in self.channels.keys():
+            self.log("core", f"Starting channel: CLI")
+
+            cli_chan = self.channels["cli"]
+            await cli_chan.on_ready()
+            self._async_tasks.add(asyncio.create_task(cli_chan.run()))
+            self._async_tasks.add(asyncio.create_task(cli_chan._start_push_queue()))
+
+        self.started = True
 
         try:
             # actually run everything
@@ -367,6 +400,7 @@ class Manager:
         # wait so that everything's properly gone
         await asyncio.sleep(1)
 
+        self.started = False
         self.log("core", "Shutdown complete")
 
     async def toggle_module(self, module_name: str, autorestart=True):

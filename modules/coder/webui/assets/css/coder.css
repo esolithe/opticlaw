@@ -1,0 +1,1444 @@
+/* -- AI GENERATED CODE (Qwen3.8 Flash Next) :: 2026-10-13
+   coder sidebar tree + file edit modal styles, kept module-scoped. */
+
+.coder-panel {
+    padding: 7px;
+    flex: 1;
+    min-width: 0;
+    width: 100%;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    gap: var(--gap, 6px);
+}
+
+.coder-panel .coder-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 2px 4px;
+}
+
+.coder-panel .coder-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary, #999);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.coder-panel .coder-icon-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    color: var(--text-secondary, #999);
+    cursor: pointer;
+}
+
+.coder-panel .coder-icon-btn:hover {
+    background: var(--bg-secondary, rgba(255, 255, 255, 0.06));
+    color: var(--text-primary, #eee);
+}
+
+.coder-panel .coder-icon-btn svg {
+    width: 16px;
+    height: 16px;
+}
+
+.coder-panel .coder-sandbox {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 2px;
+}
+
+
+.coder-panel .coder-select {
+    flex: 1;
+    min-width: 0;
+    box-sizing: border-box;
+    padding: 7px 10px;
+    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+    border-radius: var(--radius-sm, 8px);
+    background: var(--bg-primary, rgba(0, 0, 0, 0.15));
+    color: var(--text-primary, #eee);
+    font-size: 12px;
+    font-family: inherit;
+}
+
+.coder-panel .coder-select:focus {
+    outline: none;
+    border-color: var(--accent, #00d4ff);
+}
+
+.coder-panel .coder-readonly-badge {
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 20px;
+    border: 1px solid rgba(255, 95, 122, 0.4);
+    color: #ff5f7a;
+    flex: 0 0 auto;
+}
+
+.coder-panel .coder-tree {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    padding: 0 2px;
+}
+
+.coder-panel .coder-empty {
+    padding: 16px 8px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--text-secondary, #999);
+}
+
+.coder-panel .coder-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    user-select: none;
+    min-width: 0;
+}
+
+.coder-panel .coder-row:hover {
+    background: var(--bg-secondary, rgba(255, 255, 255, 0.06));
+}
+
+.coder-panel .coder-row.dim {
+    opacity: 0.45;
+}
+
+.coder-panel .coder-chevron {
+    display: inline-flex;
+    color: var(--text-secondary, #999);
+    transition: transform 0.12s ease;
+    flex: 0 0 auto;
+}
+
+.coder-panel .coder-chevron.open {
+    transform: rotate(90deg);
+}
+
+.coder-panel .coder-chevron svg {
+    width: 13px;
+    height: 13px;
+}
+
+.coder-panel .coder-icon {
+    display: inline-flex;
+    color: var(--text-secondary, #999);
+    flex: 0 0 auto;
+}
+
+.coder-panel .coder-icon svg {
+    width: 14px;
+    height: 14px;
+}
+
+.coder-panel .coder-name {
+    font-size: 12.5px;
+    color: var(--text-primary, #eee);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.coder-panel .coder-footer {
+    padding: 6px 8px;
+    font-size: 11px;
+    color: #ff5f7a;
+    text-align: center;
+}
+
+/* ---- file edit modal (rendered in the core modal area) ---- */
+
+.coder-editor-modal {
+    width: min(900px, 94vw);
+}
+
+.coder-editor-modal .coder-editor-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+}
+
+.coder-editor-modal .coder-editor-icon-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 24px;
+    padding: 0;
+    background: transparent;
+    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
+    border-radius: var(--radius-sm, 8px);
+    color: var(--text-secondary, #999);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.coder-editor-modal .coder-editor-icon-btn:hover {
+    background: var(--button-bg, rgba(255, 255, 255, 0.08));
+    color: var(--text-primary, #eee);
+    border-color: var(--accent, #00d4ff);
+}
+
+.coder-editor-modal .coder-editor-icon-btn svg {
+    width: 15px;
+    height: 15px;
+}
+
+/* pinned state for the file modal's star button */
+.coder-editor-modal .coder-pin-btn.on {
+    color: #e5c07b;
+    border-color: rgba(229, 192, 123, 0.5);
+}
+
+.coder-editor-modal.maximized {
+    width: 100vw;
+    height: 100vh;
+    max-height: 100vh;
+    border-radius: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.coder-editor-modal.maximized .header {
+    flex: 0 0 auto;
+}
+
+.coder-editor-modal.maximized .coder-editor-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    height: auto;
+    overflow: hidden;
+}
+
+.coder-editor-modal.maximized .coder-editor-wrap {
+    flex: 1 1 auto;
+    min-height: 0;
+    height: auto;
+}
+
+.coder-editor-modal.maximized .coder-editor-status,
+.coder-editor-modal.maximized .coder-editor-errors,
+.coder-editor-modal.maximized .coder-editor-actions {
+    flex: 0 0 auto;
+}
+
+.coder-editor-modal .coder-editor-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-family: "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
+    font-weight: 500;
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+.coder-editor-modal .coder-dirty-dot {
+    color: #febc2e;
+    font-size: 11px;
+}
+
+.coder-editor-modal .coder-ro-tag {
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 20px;
+    border: 1px solid rgba(255, 95, 122, 0.4);
+    color: #ff5f7a;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-family: inherit;
+}
+
+.coder-editor-modal .coder-editor-body {
+    padding: 12px 14px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+/* ---- CodeMirror editor (vendored under assets/vendor/, lazy-loaded) ----
+   the wrap owns border/radius/background; the editor fills it and follows
+   the app's dark/light mode through the cm-s-lumara / cm-s-lumara-light
+   theme classes below, palette-matched to the github-dark/light code
+   themes the chat uses. */
+
+.coder-editor-modal .coder-editor-wrap {
+    position: relative;
+    height: min(58vh, 520px);
+    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
+    border-radius: var(--radius-sm, 8px);
+    background: var(--bg-primary, #0d0d10);
+    overflow: hidden;
+}
+
+.coder-editor-modal .coder-editor-wrap:focus-within {
+    border-color: var(--accent, #00d4ff);
+}
+
+.coder-editor-modal .coder-cm-host {
+    height: 100%;
+}
+
+.coder-editor-modal .coder-vim-mode-badge {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    padding: 2px 7px;
+    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
+    border-radius: 999px;
+    background: var(--bg-primary, rgba(0, 0, 0, 0.18));
+    color: var(--text-secondary, #999);
+    font-size: 10px;
+    line-height: 1;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.coder-editor-modal .coder-vim-mode-badge.insert,
+.coder-editor-modal .coder-vim-mode-badge.replace {
+    border-color: rgba(94, 214, 154, 0.45);
+    color: #5ed69a;
+}
+
+.coder-editor-modal .coder-vim-mode-badge.visual {
+    border-color: rgba(254, 188, 46, 0.45);
+    color: #febc2e;
+}
+
+.coder-editor-modal .coder-vim-mode-badge.normal {
+    border-color: rgba(0, 212, 255, 0.35);
+    color: var(--accent, #00d4ff);
+}
+
+.coder-editor-modal .CodeMirror {
+    height: 100%;
+    background: transparent;
+    font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", Menlo, Consolas, monospace;
+    font-size: 12.5px;
+    line-height: 20px;
+}
+
+/* keep CodeMirror's vim/dialog command bar compact */
+.coder-editor-modal .CodeMirror-dialog {
+    padding: 0 6px;
+    min-height: 22px;
+    line-height: 22px;
+}
+
+.coder-editor-modal .CodeMirror-dialog input {
+    height: 20px;
+    min-height: 20px;
+    padding: 0;
+    font-size: 11px;
+    line-height: 20px;
+    vertical-align: middle;
+    /* vim normal mode sets caret-color: transparent on the editor wrapper;
+       the command dialog is a real input and needs its caret back */
+    caret-color: currentColor !important;
+}
+
+.coder-editor-modal .CodeMirror-dialog button {
+    height: 18px;
+    padding: 0 6px;
+    line-height: 18px;
+    vertical-align: middle;
+}
+
+.coder-editor-modal .CodeMirror-lines {
+    padding: 10px 0;
+}
+
+.coder-editor-modal .CodeMirror-line {
+    padding-left: 8px;
+    padding-right: 12px;
+}
+
+.coder-editor-modal .CodeMirror-gutters {
+    background: transparent;
+    border-right: 1px solid var(--border-color, rgba(127, 127, 127, 0.18));
+}
+
+/* -- AI GENERATED CODE (Qwen3.8 Flash Next) :: 2026-10-13
+   diff points (file opened from the git sidebar's diff view): header
+   prev/next group, added-line backgrounds, and the deletion-site gutter
+   that only exists while marks are active. */
+.coder-editor-modal .coder-diff-nav {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding-right: 7px;
+    margin-right: 1px;
+    border-right: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+}
+
+.coder-editor-modal .coder-diff-count {
+    min-width: 3.4em;
+    text-align: center;
+    font-size: 11px;
+    color: var(--text-secondary, #999);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.coder-editor-modal .CodeMirror-linebackground.cm-diff-add {
+    background: rgba(63, 220, 151, 0.10);
+}
+
+.coder-editor-modal .CodeMirror-gutter.cm-diff-gutter {
+    min-width: 5px;
+}
+
+.cm-diff-del-mark {
+    display: block;
+    box-sizing: border-box;
+    width: 4px;
+    height: 1.2em;
+    margin: 0 auto;
+    border-radius: 2px;
+    background: #ff5f7a;
+}
+
+.coder-editor-loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    color: var(--text-secondary, #999);
+    pointer-events: none;
+}
+
+/* live caret/selection/mode readout under the editor */
+.coder-editor-status {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    font-family: "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: var(--text-secondary, #8a8a94);
+    padding: 0 2px;
+}
+
+.coder-editor-status .hints {
+    margin-left: auto;
+    opacity: 0.65;
+}
+
+.coder-editor-status .vim-tag {
+    font-size: 10px;
+    padding: 1px 7px;
+    border-radius: 20px;
+    border: 1px solid rgba(63, 220, 151, 0.4);
+    color: #3fdc97;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+/* lint tooltips get appended to document.body, so styled globally (the
+   theme vars live on :root and reach them fine).
+
+   NOTE the element-prefixed selector: lint.css is lazy-loaded AFTER
+   this file with the editor, so a same-specificity rule there (its
+   default is z-index 4!) would otherwise win by load order and bury
+   the tooltip behind the modal. div. outranks it regardless of order. */
+div.CodeMirror-lint-tooltip {
+    background-color: var(--bg-tertiary, #232329);
+    color: var(--text-primary, #eee);
+    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.14));
+    border-radius: 8px;
+    font-family: "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 11.5px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+    z-index: 1300;
+}
+
+/* the vendored lint.css squiggles are tuned for light pages; dotted
+    underlines read better on both of our themes */
+.cm-lint-error {
+    background-image: none;
+    border-bottom: 2px dotted #ff5f7a;
+}
+
+.cm-lint-warning {
+    background-image: none;
+    border-bottom: 2px dotted #d4a72c;
+}
+
+/* ---- lumara dark theme (github dark palette) ---- */
+
+.cm-s-lumara.CodeMirror { color: #c9d1d9; }
+.cm-s-lumara .CodeMirror-cursor { border-left: 2px solid #c9d1d9; }
+/* -- AI GENERATED CODE (Qwen3.8 Flash Next) :: 2026-10-13
+   vim normal-mode block cursor: vendor codemirror.css hardcodes green
+   (#7e7) via background. it's lazy-appended AFTER this file, so we need
+   one extra class of specificity (.CodeMirror.cm-fat-cursor) to win.
+   semi-transparent block keeps the covered letter readable. */
+.CodeMirror.cm-fat-cursor .CodeMirror-cursor {
+    background: color-mix(in srgb, var(--accent, #00d4ff) 40%, transparent);
+    border-left: 0;
+    caret-color: var(--accent, #00d4ff);
+}
+/* -- AI GENERATED CODE (Qwen3.8 Flash Next) :: 2026-10-13
+   selection follows the theme accent, same recipe as ::selection in base.css.
+   NOTE: CodeMirror-focused sits on the SAME element as cm-s-*, so the old
+   descendant selector never matched and the vendor's lavender
+   .CodeMirror-focused .CodeMirror-selected (lazy-appended after this file)
+   won. compound selector + 0-3-0 specificity fixes it. */
+.cm-s-lumara .CodeMirror-selected,
+.cm-s-lumara.CodeMirror-focused .CodeMirror-selected { background: color-mix(in srgb, var(--accent, #00d4ff) 30%, transparent); }
+.cm-s-lumara.CodeMirror-focused .CodeMirror-selected { background: color-mix(in srgb, var(--accent, #00d4ff) 38%, transparent); }
+.cm-s-lumara .CodeMirror-activeline-background { background: rgba(127, 127, 127, 0.09); }
+.cm-s-lumara .CodeMirror-linenumber { color: #6e7681; }
+.cm-s-lumara .CodeMirror-gutter-filler,
+.cm-s-lumara .CodeMirror-gutter { background: transparent; }
+.cm-s-lumara .CodeMirror-matchingbracket { color: #3fb950 !important; font-weight: 600; }
+.cm-s-lumara .CodeMirror-nonmatchingbracket { color: #ff7b72 !important; }
+.cm-s-lumara .cm-trailingspace { border-bottom: 1px dotted #ff5f7a; }
+.cm-s-lumara .CodeMirror-searching { background: rgba(212, 167, 0, 0.35); color: inherit !important; }
+.cm-s-lumara .CodeMirror-search-match {
+    background: rgba(212, 167, 0, 0.4);
+    border-top: 1px solid #d4a72c;
+    border-bottom: 1px solid #d4a72c;
+    box-sizing: border-box;
+    opacity: 0.6;
+}
+.cm-s-lumara .CodeMirror-dialog { background: #1c2128; color: #c9d1d9; border-color: rgba(255, 255, 255, 0.14); }
+.cm-s-lumara .CodeMirror-dialog input {
+    background: #0d1117;
+    color: #c9d1d9;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 4px;
+}
+.cm-s-lumara .cm-foldPlaceholder {
+    background: #30363d;
+    border-color: #484f58;
+    color: #8b949e;
+    border-radius: 4px;
+    padding: 0 4px;
+}
+
+/* tokens */
+.cm-s-lumara .cm-keyword { color: #ff7b72; }
+.cm-s-lumara .cm-atom,
+.cm-s-lumara .cm-number { color: #79c0ff; }
+.cm-s-lumara .cm-def { color: #d2a8ff; }
+.cm-s-lumara .cm-variable { color: #c9d1d9; }
+.cm-s-lumara .cm-variable-2 { color: #ffa657; }
+.cm-s-lumara .cm-variable-3,
+.cm-s-lumara .cm-type { color: #7ee787; }
+.cm-s-lumara .cm-property,
+.cm-s-lumara .cm-attribute { color: #79c0ff; }
+.cm-s-lumara .cm-operator { color: #ff7b72; }
+.cm-s-lumara .cm-comment { color: #8b949e; font-style: italic; }
+.cm-s-lumara .cm-string,
+.cm-s-lumara .cm-string-2 { color: #a5d6ff; }
+.cm-s-lumara .cm-meta { color: #8b949e; }
+.cm-s-lumara .cm-qualifier { color: #7ee787; }
+.cm-s-lumara .cm-builtin { color: #ffa657; }
+.cm-s-lumara .cm-bracket { color: #c9d1d9; }
+.cm-s-lumara .cm-tag { color: #7ee787; }
+.cm-s-lumara .cm-header { color: #1f6feb; font-weight: 600; }
+.cm-s-lumara .cm-quote { color: #7ee787; }
+.cm-s-lumara .cm-hr { color: #6e7681; }
+.cm-s-lumara .cm-link { color: #79c0ff; text-decoration: underline; }
+.cm-s-lumara .cm-strikethrough { text-decoration: line-through; }
+.cm-s-lumara .cm-error { color: #ff7b72; }
+
+/* ---- lumara light theme (github light palette) ---- */
+
+.cm-s-lumara-light.CodeMirror { color: #24292e; }
+.cm-s-lumara-light .CodeMirror-cursor { border-left: 2px solid #24292e; }
+/* -- AI GENERATED CODE (Qwen3.8 Flash Next) :: 2026-10-13
+   same focused-selector fix as the dark theme above */
+.cm-s-lumara-light .CodeMirror-selected,
+.cm-s-lumara-light.CodeMirror-focused .CodeMirror-selected { background: color-mix(in srgb, var(--accent, #0091c7) 30%, transparent); }
+.cm-s-lumara-light .CodeMirror-activeline-background { background: rgba(0, 0, 0, 0.045); }
+.cm-s-lumara-light .CodeMirror-linenumber { color: #9aa0a6; }
+.cm-s-lumara-light .CodeMirror-gutter-filler,
+.cm-s-lumara-light .CodeMirror-gutter { background: transparent; }
+.cm-s-lumara-light .CodeMirror-matchingbracket { color: #22863a !important; font-weight: 600; }
+.cm-s-lumara-light .CodeMirror-nonmatchingbracket { color: #b31d28 !important; }
+.cm-s-lumara-light .cm-trailingspace { border-bottom: 1px dotted #b31d28; }
+.cm-s-lumara-light .CodeMirror-searching { background: rgba(255, 221, 0, 0.4); color: inherit !important; }
+.cm-s-lumara-light .CodeMirror-search-match {
+    background: rgba(255, 221, 0, 0.5);
+    border-top: 1px solid #e7c000;
+    border-bottom: 1px solid #e7c000;
+    box-sizing: border-box;
+    opacity: 0.6;
+}
+.cm-s-lumara-light .CodeMirror-dialog { background: #f6f8fa; color: #24292e; border-color: rgba(0, 0, 0, 0.15); }
+.cm-s-lumara-light .CodeMirror-dialog input {
+    background: #fff;
+    color: #24292e;
+    border: 1px solid rgba(0, 0, 0, 0.15);
+    border-radius: 4px;
+}
+.cm-s-lumara-light .cm-foldPlaceholder {
+    background: #e1e4e8;
+    border-color: #d1d5da;
+    color: #6a737d;
+    border-radius: 4px;
+    padding: 0 4px;
+}
+
+/* tokens */
+.cm-s-lumara-light .cm-keyword { color: #d73a49; }
+.cm-s-lumara-light .cm-atom,
+.cm-s-lumara-light .cm-number { color: #005cc5; }
+.cm-s-lumara-light .cm-def { color: #6f42c1; }
+.cm-s-lumara-light .cm-variable { color: #24292e; }
+.cm-s-lumara-light .cm-variable-2 { color: #e36209; }
+.cm-s-lumara-light .cm-variable-3,
+.cm-s-lumara-light .cm-type { color: #22863a; }
+.cm-s-lumara-light .cm-property,
+.cm-s-lumara-light .cm-attribute { color: #005cc5; }
+.cm-s-lumara-light .cm-operator { color: #d73a49; }
+.cm-s-lumara-light .cm-comment { color: #6a737d; font-style: italic; }
+.cm-s-lumara-light .cm-string,
+.cm-s-lumara-light .cm-string-2 { color: #032f62; }
+.cm-s-lumara-light .cm-meta { color: #6a737d; }
+.cm-s-lumara-light .cm-qualifier { color: #22863a; }
+.cm-s-lumara-light .cm-builtin { color: #e36209; }
+.cm-s-lumara-light .cm-bracket { color: #24292e; }
+.cm-s-lumara-light .cm-tag { color: #22863a; }
+.cm-s-lumara-light .cm-header { color: #005cc5; font-weight: 600; }
+.cm-s-lumara-light .cm-quote { color: #22863a; }
+.cm-s-lumara-light .cm-hr { color: #9aa0a6; }
+.cm-s-lumara-light .cm-link { color: #005cc5; text-decoration: underline; }
+.cm-s-lumara-light .cm-strikethrough { text-decoration: line-through; }
+.cm-s-lumara-light .cm-error { color: #b31d28; }
+
+.coder-editor-modal .coder-editor-errors {
+    font-size: 12px;
+    color: #ff5f7a;
+    white-space: pre-wrap;
+    font-family: "JetBrains Mono", Menlo, Consolas, monospace;
+    max-height: 120px;
+    overflow-y: auto;
+}
+
+.coder-editor-modal .coder-editor-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+/* -- AI GENERATED CODE (Qwen3.8 Flash Next) :: 2026-10-13
+   saved-note + save button live in the status bar now (the actions row
+   under the editor was removed); sized down to sit on the 11px baseline */
+.coder-editor-modal .coder-saved-note {
+    font-size: 11px;
+    color: #3fdc97;
+}
+
+.coder-editor-status .coder-action {
+    padding: 3px 12px;
+    font-size: 11px;
+}
+
+.coder-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 7px 14px;
+    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.15));
+    border-radius: var(--radius-sm, 8px);
+    background: none;
+    color: var(--text-primary, #eee);
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+}
+
+.coder-action:hover {
+    background: var(--bg-secondary, rgba(255, 255, 255, 0.08));
+}
+
+.coder-action.primary {
+    background: var(--accent, #00d4ff);
+    border-color: var(--accent, #00d4ff);
+    color: #0b0b10;
+    font-weight: 600;
+}
+
+.coder-action.primary:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+/* ---- right-click context menu (fixed: escapes the sidebar's overflow) ---- */
+
+.coder-menu {
+    position: fixed;
+    z-index: 1200;
+    min-width: 172px;
+    padding: 5px;
+    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.14));
+    border-radius: var(--radius-sm, 8px);
+    background: var(--bg-tertiary, #232329);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.coder-menu-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 7px 10px;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    color: var(--text-primary, #eee);
+    font-size: 12.5px;
+    font-family: inherit;
+    cursor: pointer;
+}
+
+.coder-menu-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.coder-menu-item.danger {
+    color: #ff5f7a;
+}
+
+.coder-menu-sep {
+    margin: 4px 6px;
+    border: none;
+    border-top: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+}
+
+/* ---- in-sidebar search ---- */
+
+.coder-panel .coder-searchrow {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 2px;
+}
+
+.coder-panel .coder-search {
+    flex: 1;
+    min-width: 0;
+    box-sizing: border-box;
+    padding: 7px 10px;
+    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+    border-radius: var(--radius-sm, 8px);
+    background: var(--bg-primary, rgba(0, 0, 0, 0.15));
+    color: var(--text-primary, #eee);
+    font-size: 12px;
+    font-family: inherit;
+}
+
+.coder-panel .coder-search:focus {
+    outline: none;
+    border-color: var(--accent, #00d4ff);
+}
+
+.coder-panel .coder-search-mode,
+.coder-panel .coder-search-clear {
+    flex: 0 0 auto;
+    width: 28px;
+    height: 30px;
+    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+    border-radius: 6px;
+    background: none;
+    color: var(--text-secondary, #999);
+    font-size: 11px;
+    font-family: "JetBrains Mono", Menlo, Consolas, monospace;
+    cursor: pointer;
+}
+
+.coder-panel .coder-search-mode.on {
+    color: var(--accent, #00d4ff);
+    border-color: var(--accent, #00d4ff);
+}
+
+.coder-panel .coder-search-mode:hover,
+.coder-panel .coder-search-clear:hover {
+    background: var(--bg-secondary, rgba(255, 255, 255, 0.06));
+    color: var(--text-primary, #eee);
+}
+
+.coder-panel .coder-results {
+    gap: 2px;
+}
+
+.coder-panel .coder-result {
+    padding: 5px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    min-width: 0;
+}
+
+.coder-panel .coder-result:hover {
+    background: var(--bg-secondary, rgba(255, 255, 255, 0.06));
+}
+
+.coder-panel .coder-result-file {
+    font-size: 11px;
+    color: var(--text-secondary, #999);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.coder-panel .coder-result-file .ln {
+    color: var(--accent, #00d4ff);
+}
+
+.coder-panel .coder-result-line {
+    font-family: "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: var(--text-primary, #ddd);
+    white-space: pre;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    opacity: 0.85;
+}
+
+/* ---- drag & drop ---- */
+
+.coder-panel .coder-row {
+    /* plain arrow: rows are draggable but a grab cursor read as noise */
+    cursor: default;
+}
+
+.coder-panel .coder-row.drop-target,
+.coder-panel .coder-tree.drop-target {
+    background: rgba(0, 212, 255, 0.12);
+    box-shadow: inset 0 0 0 1px var(--accent, #00d4ff);
+}
+
+/* ---- fuzzy quick-open modal ---- */
+
+.coder-quick-modal {
+    width: min(560px, 92vw);
+}
+
+.coder-quick-modal .coder-quick-body {
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.coder-quick-modal .coder-quick-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px 12px;
+    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.15));
+    border-radius: var(--radius-sm, 8px);
+    background: var(--bg-primary, rgba(0, 0, 0, 0.2));
+    color: var(--text-primary, #eee);
+    font-family: "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 13px;
+}
+
+.coder-quick-modal .coder-quick-input:focus {
+    outline: none;
+    border-color: var(--accent, #00d4ff);
+}
+
+.coder-quick-modal .coder-quick-list {
+    max-height: 320px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.coder-quick-modal .coder-quick-item {
+    padding: 7px 10px;
+    border-radius: 6px;
+    font-family: "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: var(--text-primary, #ddd);
+    cursor: pointer;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.coder-quick-modal .coder-quick-item.active {
+    background: rgba(0, 212, 255, 0.14);
+    color: var(--text-primary, #fff);
+}
+
+.coder-quick-modal .coder-quick-empty {
+    padding: 14px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--text-secondary, #999);
+}
+
+/* ---- small name-prompt modal ---- */
+
+.coder-prompt-modal {
+    width: min(420px, 92vw);
+}
+
+.coder-prompt-modal .coder-prompt-body {
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.coder-prompt-modal .coder-prompt-error {
+    font-size: 12px;
+    color: #ff5f7a;
+    white-space: pre-wrap;
+}
+
+/* ---- coder card on the core welcome screen (templates/chat/welcome.html)
+   rendered inside the centered .welcome-panel; text-align is restored
+   per-block since the panel centers everything ---- */
+
+.welcome-panel .coder-welcome {
+    margin-top: 18px;
+    width: 100%;
+    display: flex;
+    justify-content: center;
+}
+
+
+
+.coder-welcome .coder-welcome-card {
+    width: 100%;
+    max-width: 460px;
+    box-sizing: border-box;
+    text-align: left;
+    padding: 14px 16px;
+    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+    border-radius: var(--radius-sm, 10px);
+    background: color-mix(in srgb, var(--bg-secondary, #fff) 4%, transparent);
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.coder-welcome .coder-welcome-section {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    min-width: 0;
+}
+
+.coder-welcome .coder-welcome-label {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-secondary, #888);
+}
+
+.coder-welcome .coder-welcome-clear {
+    border: none;
+    background: none;
+    color: var(--text-secondary, #888);
+    font-size: 14px;
+    line-height: 1;
+    padding: 0 2px;
+    cursor: pointer;
+}
+
+.coder-welcome .coder-welcome-clear:hover {
+    color: #ff5f7a;
+}
+
+.coder-welcome .coder-welcome-file {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    min-width: 0;
+    padding: 5px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.coder-welcome .coder-welcome-file:hover {
+    background: var(--bg-secondary, rgba(255, 255, 255, 0.06));
+}
+
+.coder-welcome .coder-welcome-file .fname {
+    font-family: "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: var(--text-primary, #eee);
+    flex: 0 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.coder-welcome .coder-welcome-file .fpath {
+    font-family: "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: var(--text-secondary, #888);
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    direction: rtl; /* long dirs clip at the front, filename stays readable */
+    text-align: left;
+    opacity: 0.8;
+}
+
+.coder-welcome .coder-welcome-file .fsandbox {
+    flex: 0 0 auto;
+    font-size: 10px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
+    color: var(--text-secondary, #999);
+}
+
+.coder-welcome .coder-welcome-file .fage {
+    flex: 0 0 auto;
+    font-size: 10px;
+    color: var(--text-secondary, #777);
+    font-variant-numeric: tabular-nums;
+}
+
+/* pinned rows: gold star, hover-revealed unpin cross */
+.coder-welcome .coder-welcome-file .star {
+    flex: 0 0 auto;
+    font-size: 11px;
+    line-height: 1;
+    color: #e5c07b;
+}
+
+.coder-welcome .coder-welcome-file .funpin {
+    flex: 0 0 auto;
+    border: none;
+    background: none;
+    color: var(--text-secondary, #888);
+    font-size: 13px;
+    line-height: 1;
+    padding: 0 2px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+}
+
+.coder-welcome .coder-welcome-file:hover .funpin {
+    opacity: 1;
+}
+
+.coder-welcome .coder-welcome-file .funpin:hover {
+    color: #ff5f7a;
+}
+
+/* ---- resume row: the single last-opened file ---- */
+
+.coder-welcome .coder-welcome-resume {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+    padding: 8px 10px;
+    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
+    border-radius: var(--radius-sm, 8px);
+    background: color-mix(in srgb, var(--accent, #00d4ff) 6%, transparent);
+    cursor: pointer;
+    transition: border-color 0.15s ease;
+}
+
+.coder-welcome .coder-welcome-resume:hover {
+    border-color: var(--accent, #00d4ff);
+}
+
+.coder-welcome .coder-welcome-resume .rr-icon {
+    width: 12px;
+    height: 12px;
+    align-self: center;
+    flex: 0 0 auto;
+    color: var(--accent, #00d4ff);
+}
+
+.coder-welcome .coder-welcome-resume .rr-label {
+    flex: 0 0 auto;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--accent, #00d4ff);
+}
+
+.coder-welcome .coder-welcome-resume .rr-name {
+    flex: 0 0 auto;
+    max-width: 55%;
+    font-family: "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 12.5px;
+    color: var(--text-primary, #eee);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.coder-welcome .coder-welcome-resume .rr-dir {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-family: "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: var(--text-secondary, #888);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    direction: rtl;
+    text-align: left;
+    opacity: 0.8;
+}
+
+.coder-welcome .coder-welcome-resume .rr-age {
+    flex: 0 0 auto;
+    font-size: 10px;
+    color: var(--text-secondary, #777);
+    font-variant-numeric: tabular-nums;
+}
+
+/* ---- git strip: repo · branch · dirty/clean + recent commits ---- */
+
+.coder-welcome .coder-welcome-git {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+    font-size: 11px;
+    color: var(--text-secondary, #999);
+}
+
+.coder-welcome .coder-welcome-git.gw-has-above {
+    border-top: 1px solid var(--border-color, rgba(255, 255, 255, 0.07));
+    padding-top: 10px;
+}
+
+.coder-welcome .coder-welcome-git .gw-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    margin-bottom: 3px;
+}
+
+/* commit rows: same look as the git log modal's entries, sized down */
+.coder-welcome .coder-welcome-git .gw-entry {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 11.5px;
+    padding: 3px 8px;
+    border-radius: 5px;
+    color: var(--text-secondary, #bbb);
+    min-width: 0;
+}
+
+.coder-welcome .coder-welcome-git .gw-entry > span:last-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.coder-welcome .coder-welcome-git .gw-entry .h {
+    flex: 0 0 auto;
+    font-family: "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 10.5px;
+    color: var(--accent, #00d4ff);
+    opacity: 0.85;
+}
+
+.coder-welcome .coder-welcome-git .gw-repo {
+    flex: 0 0 auto;
+    max-width: 30%;
+    font-weight: 600;
+    color: var(--text-primary, #ddd);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.coder-welcome .coder-welcome-git .gw-sep {
+    flex: 0 0 auto;
+    color: var(--text-secondary, #777);
+}
+
+.coder-welcome .coder-welcome-git .gw-branch {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 40%;
+    font-family: "JetBrains Mono", Menlo, Consolas, monospace;
+    color: var(--text-primary, #ddd);
+}
+
+.coder-welcome .coder-welcome-git .gw-branch svg {
+    width: 12px;
+    height: 12px;
+    flex: 0 0 auto;
+    color: var(--accent, #00d4ff);
+}
+
+.coder-welcome .coder-welcome-git .gw-branch > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+
+
+/* the dirty badge and the clean label are mutually exclusive; both carry
+   the auto margin so whichever one shows pushes itself (and the git link
+   behind it) to the right edge of the header row */
+.coder-welcome .coder-welcome-git .gw-dirty {
+    flex: 0 0 auto;
+    margin-left: auto;
+    padding: 1px 8px;
+    border: 1px solid rgba(254, 188, 46, 0.45);
+    border-radius: 999px;
+    background: none;
+    color: #febc2e;
+    font-size: 10px;
+    font-family: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.coder-welcome .coder-welcome-git .gw-dirty:hover {
+    background: rgba(254, 188, 46, 0.12);
+}
+
+.coder-welcome .coder-welcome-git .gw-clean {
+    flex: 0 0 auto;
+    margin-left: auto;
+    color: #3fdc97;
+    font-size: 10px;
+}
+
+.coder-welcome .coder-welcome-git .gw-open {
+    flex: 0 0 auto;
+    border: none;
+    background: none;
+    color: var(--text-secondary, #999);
+    font-size: 10.5px;
+    font-family: inherit;
+    cursor: pointer;
+    padding: 1px 2px;
+}
+
+.coder-welcome .coder-welcome-git .gw-open:hover {
+    color: var(--accent, #00d4ff);
+}
+
+/* -- AI GENERATED CODE (Qwen3.8 Flash Next) :: 2026-10-13
+   breadcrumbs in the editor header */
+.coder-breadcrumbs {
+    flex-wrap: nowrap;
+    overflow: hidden;
+    min-width: 0;
+}
+
+.coder-breadcrumbs .crumb-segment {
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+}
+
+.coder-breadcrumbs .crumb-sep {
+    color: var(--text-secondary, #666);
+    margin: 0 2px;
+    flex: 0 0 auto;
+}
+
+.coder-breadcrumbs .crumb-btn {
+    background: none;
+    border: none;
+    padding: 1px 3px;
+    border-radius: 3px;
+    color: var(--text-secondary, #999);
+    font-size: inherit;
+    font-family: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.coder-breadcrumbs .crumb-btn:hover {
+    color: var(--accent, #00d4ff);
+    background: rgba(0, 212, 255, 0.08);
+}
+
+.coder-breadcrumbs .crumb-file {
+    color: var(--text-primary, #eee);
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.coder-breadcrumbs .crumb-btn.current {
+    color: var(--text-primary, #eee);
+    font-weight: 500;
+}
+
+/* autosave indicator */
+.coder-autosave-tag {
+    font-size: 9px;
+    padding: 1px 6px;
+    border-radius: 20px;
+    border: 1px solid rgba(63, 220, 151, 0.35);
+    color: #3fdc97;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    flex: 0 0 auto;
+}
+
+/* -- AI GENERATED CODE (Qwen3.8 Flash Next) :: 2026-10-13
+   markdown preview split pane */
+.coder-editor-split {
+    display: flex;
+    gap: 10px;
+    min-height: 0;
+    flex: 1;
+}
+
+.coder-editor-split .coder-editor-wrap {
+    flex: 1;
+    min-width: 0;
+}
+
+.coder-editor-split.has-preview .coder-editor-wrap {
+    flex: 1 1 50%;
+}
+
+.coder-md-preview {
+    flex: 1 1 50%;
+    min-width: 0;
+    overflow-y: auto;
+    padding: 12px 16px;
+    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
+    border-radius: var(--radius-sm, 8px);
+    background: var(--bg-primary, #0d0d10);
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-primary, #ddd);
+}
+
+.coder-md-preview h1, .coder-md-preview h2, .coder-md-preview h3 {
+    margin: 0.8em 0 0.4em;
+    color: var(--text-primary, #eee);
+}
+
+.coder-md-preview h1:first-child, .coder-md-preview h2:first-child {
+    margin-top: 0;
+}
+
+.coder-md-preview code {
+    font-family: "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 11.5px;
+    background: rgba(127, 127, 127, 0.15);
+    padding: 1px 4px;
+    border-radius: 3px;
+}
+
+.coder-md-preview pre {
+    background: rgba(127, 127, 127, 0.1);
+    padding: 10px 12px;
+    border-radius: 6px;
+    overflow-x: auto;
+}
+
+.coder-md-preview pre code {
+    background: none;
+    padding: 0;
+}
+
+.coder-md-preview a {
+    color: var(--accent, #00d4ff);
+}
+
+.coder-md-preview blockquote {
+    border-left: 3px solid var(--accent, #00d4ff);
+    margin: 0.5em 0;
+    padding: 4px 12px;
+    color: var(--text-secondary, #aaa);
+}
+
+.coder-md-preview table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 12px;
+}
+
+.coder-md-preview th, .coder-md-preview td {
+    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+    padding: 5px 8px;
+}
+
+/* markdown preview button active state */
+.coder-editor-modal .coder-md-btn.on {
+    color: var(--accent, #00d4ff);
+    border-color: var(--accent, #00d4ff);
+}
+
+/* revert-to-HEAD button: reddish hover to signal destructive action */
+.coder-editor-modal .coder-revert-btn:hover:not(:disabled) {
+    color: #ff5f7a;
+    border-color: rgba(255, 95, 122, 0.5);
+    background: rgba(255, 95, 122, 0.08);
+}
+
+/* -- AI GENERATED CODE (Qwen3.8 Flash Next) :: 2026-10-13
+   OS file upload drop target highlight */
+.coder-panel .coder-tree.drop-target {
+    background: rgba(0, 212, 255, 0.08);
+    box-shadow: inset 0 0 0 2px var(--accent, #00d4ff);
+    border-radius: var(--radius-sm, 8px);
+}
+
+/* -- AI GENERATED CODE (Qwen3.8 Flash Next) :: 2026-10-13
+   text inputs inside prompt modals (branch create, etc.) */
+.coder-prompt-modal input[type="text"] {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 9px 12px;
+    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.15));
+    border-radius: var(--radius-sm, 8px);
+    background: var(--bg-primary, rgba(0, 0, 0, 0.2));
+    color: var(--text-primary, #eee);
+    font-family: "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 12.5px;
+}
+
+.coder-prompt-modal input[type="text"]:focus {
+    outline: none;
+    border-color: var(--accent, #00d4ff);
+}
+
+

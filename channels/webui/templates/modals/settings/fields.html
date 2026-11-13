@@ -61,7 +61,7 @@
         </template>
 
         <!-- Array/List -->
-        <template x-if="setting.type === 'array'">
+        <template x-if="setting.type === 'array' || setting.type === 'list'">
             <div class="row">
                 <div class="array-field">
                     <div class="array-header">
@@ -174,15 +174,15 @@
         </template>
 
         <!--
-            special fields can be defined in the detectFieldType() function
-            over in js/processors/settings_structure.js
+            special fields are assigned by the detect_field_type() function
+            in channels/webui.py (SPECIAL_FIELD_TYPES)
         -->
         <!-- API url field -->
         <template x-if="setting.type === 'api_url'">
             <div class="row">
                 <label x-text="setting.title.toUpperCase()"></label>
                 <input type="text" :value="setting.value" 
-                       @blur="updateSetting(setting, $event.target.value); await $store.settings.saveSettings(); await $store.settings.checkApiConnection();">
+                       @blur="if ($event.target.value !== setting.value) { updateSetting(setting, $event.target.value); await $store.settings.saveSettings(); await $store.settings.checkApiConnection(); }">
                 <div class="api-status">
                     <span :class="{'status-dot': true, 'connected': $store.settings.apiStatus, 'disconnected': !$store.settings.apiStatus}"></span>
                     <span x-text="$store.settings.apiStatus ? 'connected' : 'not connected'"></span>
@@ -199,7 +199,7 @@
             <div class="row">
                 <label x-text="setting.title"></label>
                 <input type="text" :value="setting.value" 
-                       @blur="updateSetting(setting, $event.target.value); await $store.settings.saveSettings(); await $store.settings.checkApiConnection();">
+                       @blur="if ($event.target.value !== setting.value) { updateSetting(setting, $event.target.value); await $store.settings.saveSettings(); await $store.settings.checkApiConnection(); }">
                 <span class="description" x-show="setting.description" x-html="renderMarkdown(setting.description)"></span>
             </div>
         </template>
@@ -231,6 +231,9 @@
                     </button>
                 </div>
                 <span class="description" x-show="setting.description" x-html="renderMarkdown(setting.description)"></span>
+                <template x-if="!$store.settings.modelsLoadError && (!$store.settings.cachedModels || $store.settings.cachedModels.length === 0)">
+                    <p class="model-empty-note">No models found on the API. Press the refresh button to load the model list.</p>
+                </template>
                 <!-- Error message if fetch failed -->
                 <template x-if="$store.settings.modelsLoadError">
                     <p class="error" x-text="'Could not load models: ' + $store.settings.modelsLoadError"></p>

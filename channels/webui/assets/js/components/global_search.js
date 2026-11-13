@@ -13,16 +13,15 @@ function globalSearch() {
             this.activeIndex = -1;
             this.loading = false;
             this.searchInContent = true;
-            setTimeout(() => {
-                document.getElementById("global-search-input").focus();
+            this.focusTimer = setTimeout(() => {
+                const input = document.getElementById("global-search-input");
+                if (input) input.focus();
             }, 50);
         },
 
-        highlightQuery(text, query) {
-            if (!query || !text) return text;
-            const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            const regex = new RegExp(`(${escaped})`, 'gi');
-            return text.replace(regex, '<strong class="search-highlight">$1</strong>');
+        destroy() {
+            clearTimeout(this.debounceTimer);
+            clearTimeout(this.focusTimer);
         },
 
         async search() {
@@ -31,12 +30,19 @@ function globalSearch() {
 
             if (!q) {
                 this.results = [];
+                this.loading = false;
                 return;
             }
 
+            this.results = [];
+            this.activeIndex = -1;
             this.loading = true;
+
             this.debounceTimer = setTimeout(async () => {
-                this.results = await Alpine.store('chat').searchGlobal(q, this.searchInContent);
+                const results = await Alpine.store('chat').searchGlobal(q, this.searchInContent, null, [], 'relevance');
+                
+                if (this.query.trim() !== q) return;
+                this.results = results;
                 this.loading = false;
                 this.activeIndex = -1;
             }, 150);
@@ -65,7 +71,7 @@ function globalSearch() {
         async enterResult() {
             if (this.results.length === 0) return;
             const idx = this.activeIndex >= 0 ? this.activeIndex : 0;
-            await this.selectResult(this.results[idx]?.chat?.id);
+            await this.selectResult(this.results[idx]?.id);
         }
     }
 }

@@ -1,9 +1,15 @@
-<button id="upload" @click="$refs['file-input'].click()" title="Upload file or paste images (Ctrl+V)" aria-label="Upload file or paste images (Ctrl+V)" :disabled="$store.stream.state != 'idle'">
+{% if config.get('enable_file_upload') %}
+<button id="upload" @click="$refs['file-input'].click()" title="Upload file or paste images (Ctrl+V)" aria-label="Upload file or paste images (Ctrl+V)">
     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
     </svg>
 </button>
 <input type="file" x-ref="file-input" @change="$store.upload.addFile($event)" x-show="false" x-cloak aria-hidden="true" multiple>
+{{ extension_slot("after_upload_btn") }}
+
+{% endif %}
+
+{{ extension_slot("before_input") }}
 
 <textarea 
     id="user-input" 
@@ -18,7 +24,11 @@
     rows="1"
     x-autosize
     aria-label="Message input"
+    {% if config.get('enable_file_upload') %}
     @paste="$store.upload.pasteImage($event)"
+    {% endif %}
+    @keydown.ctrl.up.prevent="$store.chat.historyPrev(); $autosize($el)"
+    @keydown.ctrl.down.prevent="$store.chat.historyNext(); $autosize($el)"
     @keydown.enter="
         if (!$event.shiftKey && !$store.ui.isMobile) {
             $event.preventDefault();
@@ -32,6 +42,12 @@
     @blur="$el.style.height = '48px'"
 ></textarea>
 
+{{ extension_slot("after_input") }}
+
+{% if config.get('enable_context_pill') %}
+{% include 'chat/context_pill.html' %}
+{% endif %}
+
 <button id="send" aria-label="Send message"
     @click="
         $event.preventDefault();
@@ -40,13 +56,11 @@
         await $store.chat.send($store.chat.user_input);
         $el.style.height = '48px';
     "
-    x-show="$store.stream.state === 'idle'"
 >Send</button>
 
 <button id="stop" aria-label="Stop generation" x-show="$store.stream.state != 'idle'" x-cloak @click="
 await simpleSocketSend({
-    'type': 'user_message',
-    'content': '/stop'
+    'type': 'stop'
 })
 ">
     <span class="stop-text">Stop</span>

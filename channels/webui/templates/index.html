@@ -32,6 +32,11 @@
     <head>
         <title>{{ config.get('title') }}</title>
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+        <!-- wraps window.fetch() to attach the X-OpenLumara header to
+             same-origin /api requests. X-OpenLumara protects the API endpoints from being hit by simple GET requests using malicious injected markdown.
+ 			 must load before every other script. -->
+        <script src="{{ url_for('assets', path='js/services/fetch_gate.js') }}"></script>
         <link rel="manifest" href="/manifest.json" />
 
         <!-- 
@@ -42,6 +47,9 @@
 
         <!-- automatic animation plugin for Alpine.js -->
         <script src="{{ url_for('assets', path='js/libs/alpine-animation.min.js') }}"></script>
+
+        <!-- collapse plugin for Alpine.js, makes collapses have gentle animation -->
+        <script src="{{ url_for('assets', path='js/libs/alpine-collapse.min.js') }}"></script>
 
         <!-- intersect plugin for Alpine.js (allows lazy loading, keeping stuff unloaded until scrolled into the viewport) -->
         <script src="{{ url_for('assets', path='js/libs/alpine-intersect.min.js') }}"></script>
@@ -64,9 +72,18 @@
         {% for file in css_files %}
         <link rel="stylesheet" href="{{ url_for('assets', path='css/'+file) }}" />
         {% endfor %}
+        
+        {% for url in ext_css_files %}
+        <link rel="stylesheet" href="{{ url }}" />
+        {% endfor %}
 
         <link rel="stylesheet" id="code-theme" href="{{ url_for('assets', path='css/code-themes/github-dark.css') }}">
 
+        {% if not config.get("enable_admin_settings") %}
+        <script>window.ADMIN_SETTINGS_DISABLED = true;</script>
+        {% endif %}
+
+        {{ extension_slot("head") }}
     </head>
     <body>
         <!-- 
@@ -74,23 +91,27 @@
             as putting every possible thing in one massive data object was no fun
         -->
         <div id="main" x-data="{}" @resize.window="
+            const wasMobile = $store.ui.isMobile;
+
             $store.ui.windowWidth = window.innerWidth;
             $store.ui.isMobile = window.innerWidth <= 768;
 
-            $store.ui.showSidebar = !$store.ui.isMobile;
+            if (wasMobile !== $store.ui.isMobile) {
+                $store.ui.showSidebar = !$store.ui.isMobile;
+            }
         ">
+            {{ extension_slot("above_page") }}
+
             <section id="main-wrapper">
                 {% if config.get("enable_sidebar") %}
-                    <section id="sidebar" 
+                    <section id="sidebar"
+                        :class="{ 'collapsed': $store.ui.sidebarCollapsed && !$store.ui.isMobile }"
                         x-show="$store.ui.showSidebar"
                         x-transition:enter="transition ease-out duration-200"
                         x-transition:enter-start="-translate-x-full"
                         x-transition:leave="transition ease-in duration-150"
                         x-transition:leave-end="-translate-x-full"
                     >
-                        <!-- 
-                        @click.away="$store.ui.showSidebar = false"
-                        -->
                         {% include 'sidebar.html' %}
                     </section>
                 {% endif %}
@@ -103,6 +124,8 @@
             <section id="modals">
                 {% include 'modals/index.html' %}
             </section>
+
+            {{ extension_slot("below_page") }}
         </div>
 
         <!-- utility functions used by everything else -->
@@ -113,6 +136,11 @@
         <!-- javascript files -->
         {% for file in js_files %}
         <script src="{{ url_for('assets', path='js/'+file) }}"></script>
+        {% endfor %}
+        
+        {# scripts from modules (webui extensions) #}
+        {% for url in ext_js_files %}
+        <script src="{{ url }}"></script>
         {% endfor %}
 
         <!--

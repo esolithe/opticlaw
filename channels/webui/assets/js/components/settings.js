@@ -13,6 +13,71 @@ function settingsModal() {
             channels: false,
             user_channels: false
         },
+
+        // collapsed module/channel categories in the settings sidebar,
+        // keyed "category::groupName", persisted so a tidied sidebar stays tidied
+        collapsedGroups: {},
+
+        // the group we auto-opened for the currently open module/channel.
+        // transient (never persisted): only one group is ever auto-open, so
+        // switching groups folds the previous one back automatically
+        autoExpandedKey: null,
+
+        groupCollapsedState(cat, label, itemCount) {
+            // effective visibility: the auto-opened group is open; else the
+            // user's persisted choice; else fold categories that hold a single
+            // module so the sidebar isn't a wall of lonely one-item headers
+            const key = cat + '::' + label;
+            if (key === this.autoExpandedKey) return false;
+            if (key in this.collapsedGroups) return !!this.collapsedGroups[key];
+            return itemCount === 1;
+        },
+
+        isGroupCollapsed(cat, label, itemCount = 0) {
+            return this.groupCollapsedState(cat, label, itemCount);
+        },
+
+        toggleGroup(cat, label, itemCount = 0) {
+            const key = cat + '::' + label;
+            const effective = this.groupCollapsedState(cat, label, itemCount);
+
+            // a manual click takes ownership of the group back from the
+            // auto-expander, otherwise the open module inside it would keep
+            // forcing it open and the click would appear to do nothing
+            if (this.autoExpandedKey === key) this.autoExpandedKey = null;
+
+            this.collapsedGroups[key] = !effective;
+            localStorage.setItem('settingsCollapsedGroups', JSON.stringify(this.collapsedGroups));
+        },
+
+        // -- AI GENERATED CODE (Qwen3.8 Flash Next) :: (2026-10-12) status:reviewed
+        // keeps the sidebar's group expansion in sync with the open module:
+        // - open module is enabled -> auto-open the group containing it; since
+        //   only one group is ever auto-open, switching to an enabled module in
+        //   another group folds the old one back and expands the new one
+        // - Back / leaving to a non-module category -> fold it back
+        // - open module is NOT enabled -> leave the sidebar exactly as it is
+        syncActiveGroup() {
+            const cat = this.activeCategory;
+            const item = this.activeModule || this.activeChannel;
+
+            if (!['modules', 'user_modules', 'channels', 'user_channels'].includes(cat) || !item) {
+                this.autoExpandedKey = null;
+                return;
+            }
+
+            const catData = Alpine.store('settings').categories[cat];
+            if (!catData || !catData.enabled || !catData.enabled.includes(item)) {
+                return;
+            }
+
+            // resolve the group through the same getter the sidebar renders
+            // with, so keys always match (incl. the hidden-label "Other" case)
+            const group = Alpine.store('settings').groupedSubItems(cat, true).find(g => g.items.includes(item));
+            if (group) {
+                this.autoExpandedKey = cat + '::' + group.label;
+            }
+        },
         
         // --- Viewport ---
         mobile: window.innerWidth <= 768,
@@ -28,6 +93,14 @@ function settingsModal() {
         messageWidth: localStorage.getItem('messageMaxWidth') || '60',
         expandReasoning: localStorage.getItem('expandReasoning') || false,
 
+        // streamed-token fade settings (localStorage; applied live, no save needed).
+        tokenFadeEnabled: localStorage.getItem('tokenFadeEnabled') !== 'false',
+        // start the live processing chain collapsed (localStorage; default off)
+        collapseChainDefault: localStorage.getItem('collapseChainDefault') === 'true',
+        // 'Step display mode' dropdown: default | thinking | steps.
+        stepDisplayMode: localStorage.getItem('stepDisplayMode') || 'default',
+        tokenFadeMs: localStorage.getItem('tokenFadeMs') || '750',
+
         get activeNavCategory() {
             return this.activeModule ? 'modules' : 
                    this.activeChannel ? 'channels' : this.activeCategory;
@@ -35,45 +108,63 @@ function settingsModal() {
 
         // --- Init & Load ---
         async init() {
-            window.addEventListener('resize', () => {
-                clearTimeout(this.resizeTimeout);
-                this.resizeTimeout = setTimeout(() => {
-                    const newMobile = window.innerWidth <= 768;
-                    if (newMobile !== this.mobile) {
-                        this.mobile = newMobile;
-                    }
-                }, 150);
-            });
-
-            // Sync theme state with Alpine store
             this.themeFamily = Alpine.store('theme').family;
             this.themeMode = Alpine.store('theme').mode;
-            
-            // Listen for theme changes from other parts of the app
-            document.addEventListener('theme-changed', (e) => {
-                this.themeFamily = e.detail.family;
-                this.themeMode = e.detail.mode;
-            });
 
             this.activeCategory = "appearance";
+
+            // restore which sidebar categories were folded away last time
+            try {
+                this.collapsedGroups = JSON.parse(localStorage.getItem('settingsCollapsedGroups') || '{}');
+            } catch (e) {
+                this.collapsedGroups = {};
+            }
+
+            // keep the sidebar's group expansion in sync with whichever module/channel is open
+            this.$watch('activeModule', () => this.syncActiveGroup());
+            this.$watch('activeChannel', () => this.syncActiveGroup());
+            this.$watch('activeCategory', () => this.syncActiveGroup());
+
+            // always pull fresh settings from the backend on every open
+            if (!window.ADMIN_SETTINGS_DISABLED) {
+                await Alpine.store('settings').load();
+            }
         },
 
-        async closeAndSave() {
-            // close the modal and save settings
+        // called from @resize.window.debounce on the modal root
+        checkMobile() {
+            const newMobile = window.innerWidth <= 768;
+            if (newMobile !== this.mobile) {
+                this.mobile = newMobile;
+            }
+        },
+
+        // unsaved-changes prompt: shown when closing with dirty settings
+        // so nobody loses edits by reflex-clicking the close button.
+        showClosePrompt: false,
+
+        async close() {
+            if (Alpine.store('settings').hasChanges) {
+                this.showClosePrompt = true;
+                return;
+            }
+            await Alpine.store('ui').closeModal();
+        },
+
+        async saveAndClose() {
             await Alpine.store('settings').saveSettings();
+
+            const store = Alpine.store('settings');
+            if (store.error || store.saveError) return;
+            await Alpine.store('ui').closeModal();
+        },
+
+        async closeWithoutSaving() {
+            this.showClosePrompt = false;
             await Alpine.store('ui').closeModal();
         },
 
         async switchCategory(cat) {
-            // Auto-save settings to the backend when switching categories
-            const settings = Alpine.store('settings');
-            await settings.saveSettings();
-
-            // Auto-fetch models if switching to the model category
-            if (cat === 'model') {
-                await settings.fetchModels();
-            }
-
             this.activeCategory = cat;
             this.activeModule = null;
             this.activeChannel = null;
@@ -142,7 +233,13 @@ function settingsModal() {
                         currentValue = currentValue[key]?.value;
                     }
                     
-                    if (currentValue !== expectedValue) return false;
+                    // -- AI GENERATED CODE (Qwen3.8 Flash Next) :: (2026-11-07) harness:openlumara status:reviewed
+                    // an array expected value means "any of these values" (e.g. {"mode": ["Pure", "Full System Prompt"]})
+                    if (Array.isArray(expectedValue)) {
+                        if (!expectedValue.includes(currentValue)) return false;
+                    } else if (currentValue !== expectedValue) {
+                        return false;
+                    }
                 }
                 return true;
             }
@@ -254,6 +351,28 @@ function settingsModal() {
             this.chatWidth = width;
             localStorage.setItem('chatContentWidth', width);
             document.documentElement.style.setProperty('--chat-content-width', `${width}%`);
+        },
+
+        handleTokenFadeToggle() {
+            this.tokenFadeEnabled = !this.tokenFadeEnabled;
+            localStorage.setItem('tokenFadeEnabled', this.tokenFadeEnabled);
+        },
+
+        handleCollapseChainToggle() {
+            this.collapseChainDefault = !this.collapseChainDefault;
+            localStorage.setItem('collapseChainDefault', this.collapseChainDefault);
+        },
+
+        // 'Step display mode' dropdown (default | thinking | steps)
+        handleStepDisplayModeChange(mode) {
+            this.stepDisplayMode = mode;
+            localStorage.setItem('stepDisplayMode', mode);
+        },
+
+        handleTokenFadeSpeed(ms) {
+            this.tokenFadeMs = ms;
+            localStorage.setItem('tokenFadeMs', ms);
+            document.documentElement.style.setProperty('--token-fade-duration', `${ms}ms`);
         },
         
         // Alpine-reactive message width change

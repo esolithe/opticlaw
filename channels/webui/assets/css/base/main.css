@@ -1,11 +1,18 @@
+#main {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+}
+
 #main-wrapper {
     display: flex;
     flex-direction: row;
-    height: 100vh;
+    flex: 1;
+    min-height: 0;
     background-color: var(--bg-primary);
 }
 
 #modals {
-    flex: 1;
+    display: contents;
 }
 

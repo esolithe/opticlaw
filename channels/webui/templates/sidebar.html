@@ -1,69 +1,212 @@
-<!-- list of categories -->
-<div id="category-list" x-ref="category-list"
-    x-show="!$store.ui.isMobile || $store.ui.showCategories" x-cloak
-    >
-    <div class="list">
-        <template x-for="category in $store.chat.categories" :key="category">
-            <ul :class="{'item': true, 'active': category == $store.chat.selectedCategory, 'disabled': $store.stream.state !== 'idle' && category !== $store.chat.selectedCategory}" @click="
-                if ($store.stream.state !== 'idle') { return }
+<!-- list of chats -->
+<div class="sidebar-shell" x-data="{
+        sidebarTab: '',
+        init() {
+            const saved = localStorage.getItem('sidebarTab') || '';
+            const tabs = Array.from(document.querySelectorAll('.sidebar-tab')).map(b => b.dataset.tab);
+            this.sidebarTab = tabs.includes(saved) ? saved : '';
+                                   
+            // with no extension tabs the tab bar is hidden, so a saved
+            // collapsed state would leave an empty strip with no way to
+            // expand - drop it in that case.
+            if (!$store.ui.isMobile && $store.ui.sidebarCollapsed &&
+                document.querySelectorAll('.sidebar-tab.ext').length === 0) {
+                $store.ui.sidebarCollapsed = false;
+                localStorage.setItem('sidebarCollapsed', 'false');
+            }
+        },
+        setTab(tab) {
+            // toggle the sidebar when clicking the active tab, except on mobile
+            if (tab === this.sidebarTab && !$store.ui.isMobile) {
+                $store.ui.sidebarCollapsed = !$store.ui.sidebarCollapsed;
+                localStorage.setItem('sidebarCollapsed', String($store.ui.sidebarCollapsed));
+                return;
+            }
+                                   
+            this.sidebarTab = tab;
+            localStorage.setItem('sidebarTab', tab);
+            // switching to a different tab always reveals the panel again
+            if ($store.ui.sidebarCollapsed) {
+                $store.ui.sidebarCollapsed = false;
+                localStorage.setItem('sidebarCollapsed', 'false');
+            }
+        },
+    }">
+    <nav class="sidebar-tabbar" aria-label="Sidebar tabs">
+        <button type="button" class="sidebar-tab" data-tab=""
+            :class="{ 'active': sidebarTab === '' }"
+            title="Chats"
+            @click="setTab('')">
+            {% include 'svg/chat.svg' %}
+        </button>
+        {% for panel in extension_sidebars() %}
+        <button type="button" class="sidebar-tab ext" data-tab="{{ panel.module }}/{{ panel.name }}"
+            :class="{ 'active': sidebarTab === '{{ panel.module }}/{{ panel.name }}' }"
+            title="{{ panel.label }}"
+            @click="setTab('{{ panel.module }}/{{ panel.name }}')">
+            {{ panel.icon }}
+        </button>
+        {% endfor %}
+    </nav>
 
-                $store.chat.selectCategory(category);
-                if ($store.ui.isMobile) {
-                    await $store.ui.toggleMobileSidebarView();
-                }
-                ">
-                <span class="icon">
-                    <template x-if="category === 'general'">
-                        {% include 'svg/home.svg' %}
-                    </template>
-                    <template x-if="category != 'general'">
-                        {% include 'svg/chat.svg' %}
-                    </template>
-                </span>
-                <span class="title" x-text="category"></span>
-            </ul>
+<div id="chat-list" x-ref="chat-list" x-cloak x-show="sidebarTab === '' && ($store.ui.isMobile || !$store.ui.sidebarCollapsed)" x-data="{ tagPanel: false }">
+    {{ extension_slot("top") }}
+
+    <div class="category-select" x-data="{ open: false, top: 0, left: 0, width: 0 }">
+        <button
+            type="button"
+            class="category-trigger"
+            :class="{ 'open': open }"
+            :disabled="$store.stream.state !== 'idle'"
+            title="Filter chats by category"
+            @click="
+                const r = $el.getBoundingClientRect();
+                /* overlap by 1px so the menu's top edge merges with the
+                   trigger's (whose bottom border/radius is hidden while
+                   open) - they read as one element */
+                top = r.bottom - 1;
+                left = r.left;
+                width = r.width;
+                open = !open;
+            "
+        >
+            <span class="cat-icon" x-show="$store.chat.selectedCategory === 'general'">{% include 'svg/home.svg' %}</span>
+            <span class="cat-icon" x-show="$store.chat.selectedCategory !== 'general'">{% include 'svg/folder.svg' %}</span>
+            <span class="cat-label" x-text="$store.chat.selectedCategory"></span>
+            <svg class="cat-chevron" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12" width="12" height="12"><path fill="currentColor" d="M6 8L1 3h10z"/></svg>
+        </button>
+        <template x-teleport="body">
+            <div class="category-menu" x-show="open" x-transition.opacity.duration.120ms
+                :style="`top: ${top}px; left: ${left}px; width: ${width}px`"
+                @click.stop @click.away="open = false"
+                @keydown.escape.window="open = false">
+                <!-- the selected category lives in the trigger, so it's
+                     left out of the list (no duplicate row) -->
+                <template x-for="category in $store.chat.dropdownCategories().filter(c => c !== $store.chat.selectedCategory)" :key="category">
+                    <button
+                        type="button"
+                        class="category-option"
+                        @click="$store.chat.selectCategory(category); open = false"
+                    >
+                        <span class="cat-icon" x-show="category === 'general'">{% include 'svg/home.svg' %}</span>
+                        <span class="cat-icon" x-show="category !== 'general'">{% include 'svg/folder.svg' %}</span>
+                        <span x-text="category"></span>
+                    </button>
+                </template>
+                <div class="category-menu-divider"></div>
+                <button type="button" class="category-option manage"
+                    @click="$store.ui.openModal('categories'); open = false">
+                    {% include 'svg/gear.svg' %}
+                    <span>manage categories...</span>
+                </button>
+            </div>
         </template>
     </div>
 
-    {% if login_enabled %}
-        <div class="buttons">
-            <!-- Logout button -->
-            <button class="sidebar-btn" @click="if(confirm('Log out?')) window.location.href='/logout'">
-                {% include 'svg/download.svg' %}
-                <span>Logout</span>
-            </button>
-        </div>
-    {% endif %}
-</div>
-
-<!-- list of chats -->
-<div id="chat-list" x-ref="chat-list" x-data="{query: ''}"
-    x-show="!$store.ui.isMobile || $store.ui.showChatList" x-cloak
->
-    <button class="header-btn" x-text="$store.chat.selectedCategory" x-show="$store.ui.isMobile" x-cloak @click="$store.ui.toggleMobileSidebarView()"></button>
-
     <div class="search">
-        <input name="search" type="text" placeholder="Search through your chats.." x-model="query">
+        <span class="search-icon" x-show="!$store.chat.searchLoading">{% include 'svg/search.svg' %}</span>
+        <span class="search-spinner" x-show="$store.chat.searchLoading" x-cloak></span>
+        <input name="search" type="text" placeholder="Search.."
+            :value="$store.chat.searchQuery"
+            @input.debounce="$store.chat.setSearchQuery($event.target.value)"
+            :disabled="$store.stream.state !== 'idle'"
+            >
+
+        <button type="button" class="search-toggle"
+            :class="{ 'active': $store.chat.searchInContent }"
+            @click="$store.chat.setSearchInContent(!$store.chat.searchInContent)"
+            :title="$store.chat.searchInContent
+                ? 'Searching titles + message content (click for titles only)'
+                : 'Search message content too (currently: titles only)'"
+            :aria-pressed="$store.chat.searchInContent"
+            :disabled="$store.stream.state !== 'idle'"
+        >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                <line x1="4" y1="6" x2="20" y2="6"/>
+                <line x1="4" y1="12" x2="20" y2="12"/>
+                <line x1="4" y1="18" x2="14" y2="18"/>
+            </svg>
+        </button>
+
+        <button type="button" class="search-toggle"
+            :class="{ 'active': $store.chat.selectedTags.length > 0 || tagPanel }"
+            @click="tagPanel = !tagPanel"
+            :title="$store.chat.selectedTags.length > 0
+                ? `Filtering by: ${$store.chat.selectedTags.join(', ')} (click for tag filter)`
+                : 'Filter chats by tags'"
+            :aria-expanded="tagPanel"
+            :disabled="$store.stream.state !== 'idle'"
+        >
+            {% include 'svg/tag.svg' %}
+        </button>
     </div>
 
+    <div class="tag-filter" x-show="tagPanel" x-transition.opacity.duration.120ms>
+        <template x-if="$store.chat.availableTags.length === 0">
+            <div class="tag-filter-empty">no tags in this category yet</div>
+        </template>
+
+        <div class="tag-chips" x-show="$store.chat.availableTags.length > 0">
+            <template x-for="tag in $store.chat.availableTags" :key="tag">
+                <button type="button" class="tag-chip"
+                    :class="{ 'selected': $store.chat.selectedTags.includes(tag) }"
+                    :disabled="$store.stream.state !== 'idle'"
+                    @click="$store.chat.toggleTag(tag)"
+                    x-text="tag">
+                </button>
+            </template>
+        </div>
+
+        <button type="button" class="tag-filter-clear"
+            x-show="$store.chat.selectedTags.length > 0"
+            @click="$store.chat.clearTags()">
+            clear filter
+        </button>
+    </div>
+
+    {{ extension_slot("above_chat_list") }}
+
     <div class="chats">
-        <div class="flex fullwidth">
-            <template x-for="chat in $store.chat.visibleChats" :key="chat.id">
-                <!-- only show if it matches the current category and search query -->
-                <template
-                    x-if="
-                        chat.category === $store.chat.selectedCategory
-                        &&
-                        (chat.title || '').toLowerCase().includes(query.toLowerCase())
-                    "
-                >
+        {{ extension_slot("top_of_chat_list") }}
+
+        <!-- search loading state -->
+        <template x-if="$store.chat.searching && $store.chat.searchLoading && $store.chat.searchResults.length === 0">
+            <div class="item search-loading-row">
+                <span class="search-spinner-inline"></span>
+                <span>searching..</span>
+            </div>
+        </template>
+
+        <!-- search empty state -->
+        <template x-if="$store.chat.searching && !$store.chat.searchLoading && $store.chat.searchResults.length === 0">
+            <div class="item">no chats found</div>
+        </template>
+
+        <template x-for="group in $store.chat.displayGroups()" :key="group.key">
+            <div class="day-group">
+                <button type="button" class="day-header"
+                    :class="{ 'expanded': !$store.chat.isGroupCollapsed(group) }"
+                    :aria-expanded="!$store.chat.isGroupCollapsed(group)"
+                    @click="$store.chat.toggleDayGroup(group)">
+                    <svg class="day-chevron" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12" width="10" height="10"><path fill="currentColor" d="M4 1l5 5-5 5z"/></svg>
+                    <span class="day-label" x-text="group.label"></span>
+                    <span class="day-count" x-show="!$store.chat.searching" x-text="group.count ?? ''"></span>
+                </button>
+
+                <template x-if="!$store.chat.isGroupCollapsed(group)">
+                    <div class="day-chats">
+                        <template x-for="chat in group.chats" :key="chat.id">
                     <!-- give selected chats a nice border via the CSS class -->
                     <div
-                        x-data="{ 
-                            active: false, 
-                            renaming: false, 
-                            renameValue: ''
+                        x-data="{
+                            active: false,
+                            renaming: false,
+                            renameValue: '',
+                            menuOpen: false,
+                            menuTop: 0,
+                            menuLeft: 0
                         }"
+                        @contextmenu.prevent="menuTop = $event.clientY; menuLeft = Math.min($event.clientX, window.innerWidth - 184); menuOpen = true"
                         :id="`chat-${chat.id}`"
                         class="item"
                         :class="{
@@ -87,61 +230,119 @@
                         "
                     >
                         <div>
-                            <template x-if="!renaming">
-                                <span class="title" x-text="chat.title || 'New chat'"></span>
-                            </template>
-                            <template x-if="renaming">
-                                <div class="rename-container">
-                                    <input 
-                                        x-ref="renameInput"
-                                        type="text" 
-                                        x-model="renameValue" 
-                                        @keydown.enter="if (renameValue.trim()) { $store.chat.renameChat(chat.id, renameValue.trim()); } renaming = false; renameValue = ''"
-                                        @keydown.escape="renaming = false; renameValue = ''"
-                                        @blur="setTimeout(() => { if (renaming) { renaming = false; renameValue = ''; } }, 150)"
-                                        class="rename-input"
-                                    >
-                                    <button @click="if (renameValue.trim()) { $store.chat.renameChat(chat.id, renameValue.trim()); } renaming = false; renameValue = ''" class="rename-action-btn save" title="Save">
-                                        {% include 'svg/checkmark.svg' %}
+                            <div class="title-row">
+                                <template x-if="!renaming && chat.title_highlighted">
+                                    <span class="title" x-html="chat.title_highlighted"></span>
+                                </template>
+                                <template x-if="!renaming && !chat.title_highlighted">
+                                    <span class="title" x-text="chat.title || 'New chat'"></span>
+                                </template>
+
+                                <template x-if="renaming">
+                                    <div class="rename-container">
+                                        <input 
+                                            x-ref="renameInput"
+                                            type="text" 
+                                            x-model="renameValue" 
+                                            @keydown.enter="if (renameValue.trim()) { $store.chat.renameChat(chat.id, renameValue.trim()); } renaming = false; renameValue = ''"
+                                            @keydown.escape="renaming = false; renameValue = ''"
+                                            @blur="setTimeout(() => { if (renaming) { renaming = false; renameValue = ''; } }, 150)"
+                                            class="rename-input"
+                                        >
+                                        <button @click="if (renameValue.trim()) { $store.chat.renameChat(chat.id, renameValue.trim()); } renaming = false; renameValue = ''" class="rename-action-btn save" title="Save">
+                                            {% include 'svg/checkmark.svg' %}
+                                        </button>
+                                        <button @click="renaming = false; renameValue = ''" class="rename-action-btn cancel" title="Cancel">
+                                            {% include 'svg/cross.svg' %}
+                                        </button>
+                                    </div>
+                                </template>
+
+                                <template x-if="(chat.tags ?? []).length > 0">
+                                    <span class="tag-icon-wrap" x-data="{ open: false, top: 0, left: 0 }"
+                                        @mouseenter="const r = $el.getBoundingClientRect(); top = r.top - 8; left = Math.max(8, Math.min(r.left, window.innerWidth - 236)); open = true"
+                                        @mouseleave="open = false">
+                                        {% include 'svg/tag.svg' %}
+                                        <template x-teleport="body">
+                                            <div class="tag-popup" x-show="open"
+                                                :style="`top: ${top}px; left: ${left}px`"
+                                                @mouseenter="open = true" @mouseleave="open = false"
+                                                @click.stop>
+                                                <template x-for="tag in (chat.tags ?? [])" :key="'popup-' + tag">
+                                                    <span class="inline-tag" x-text="tag"></span>
+                                                </template>
+                                            </div>
+                                        </template>
+                                    </span>
+                                </template>
+
+                                <div class="item-actions" @click.stop
+                                    :class="{ 'menu-open': menuOpen }">
+                                    <button class="action-btn" :class="{ active: menuOpen }" title="Actions"
+                                        @click.stop="const r = $el.getBoundingClientRect(); menuTop = r.bottom + 4; menuLeft = Math.max(8, r.right - 176); menuOpen = !menuOpen">
+                                        {% include 'svg/more_vertical.svg' %}
                                     </button>
-                                    <button @click="renaming = false; renameValue = ''" class="rename-action-btn cancel" title="Cancel">
-                                        {% include 'svg/cross.svg' %}
-                                    </button>
-                                </div>
-                            </template>
-                            
-                            <div class="meta">
-                                <span class="date" x-text="formatDate(chat.updated) || 'No date known'"></span>
-                                
-                                <div class="item-actions" @click.stop>
-                                    <button class="action-btn" @click="renaming = true; renameValue = chat.title; $nextTick(() => { $refs.renameInput.focus(); $refs.renameInput.select(); })" title="Rename">
-                                        {% include 'svg/edit.svg' %}
-                                    </button>
-                                    <button class="action-btn delete" @click="$store.chat.deleteChat(chat.id)" title="Delete">
-                                        {% include 'svg/trash.svg' %}
-                                    </button>
+                                    <template x-teleport="body">
+                                        <div class="chat-action-menu" x-show="menuOpen"
+                                            :style="`top: ${menuTop}px; left: ${menuLeft}px`"
+                                            @click.stop @click.away="menuOpen = false">
+                                            <button @click="renaming = true; renameValue = chat.title; menuOpen = false; $nextTick(() => { $refs.renameInput.focus(); $refs.renameInput.select(); })">
+                                                {% include 'svg/edit.svg' %}
+                                                Rename
+                                            </button>
+                                            <button @click="$store.chat.moveChatTarget = chat; $store.ui.openModal('move_chat'); menuOpen = false">
+                                                {% include 'svg/folder.svg' %}
+                                                Move to category
+                                            </button>
+                                            <button class="danger" @click="$store.chat.deleteChat(chat.id); menuOpen = false">
+                                                {% include 'svg/trash.svg' %}
+                                                Delete
+                                            </button>
+                                        </div>
+                                    </template>
                                 </div>
                             </div>
-                            
-                            <ul class="tags">
-                                <template x-for="tag in (chat.tags ?? []).slice(0,3)" :key="tag">
-                                    <li x-text="tag" class="tag"></li>
-                                </template>
-                            </ul>
+
+                            <!-- content snippet (search results only, pre-highlighted by the backend) -->
+                            <template x-if="$store.chat.searching && $store.chat.searchInContent && (chat.snippets_highlighted ?? []).length > 0">
+                                <div class="snippet snippet-3" x-html="chat.snippets_highlighted[0]"></div>
+                            </template>
                         </div>
                     </div>
-                </template>
-            </template>
-        </div>
+                        </template>
 
-        <!-- make sure there's always more chats than the viewport -->
-        <template x-if="$store.chat.hasMoreChats">
-            <div id="chat-scroll-loader" x-intersect="$store.chat.loadMoreChats()" class="item">loading more..</div>
+                        <template x-if="!$store.chat.searching && (!group.loaded || group.hasMore)">
+                            <div :data-day-loader="group.key"
+                                x-intersect.enter="$store.chat.ensureDayChatsFilled(group, $el)"
+                                class="item">loading more..</div>
+                        </template>
+                    </div>
+                </template>
+            </div>
         </template>
+
     </div>
 
-    <button class="sidebar-btn" @click="$store.chat.newChat()" :disabled="$store.stream.state !== 'idle'">
-        {% include 'svg/add.svg' %}
-        New Chat
-    </button>
+    <div class="sidebar-footer">
+        {{ extension_slot("bottom_of_chat_list") }}
+        {{ extension_slot("buttons") }}
+        <button class="sidebar-btn" :disabled="$store.stream.state !== 'idle'"
+            @click="
+                $store.chat.newChat();
+                if ($store.ui.isMobile) { $store.ui.showSidebar = false; }
+            ">
+            {% include 'svg/add.svg' %}
+            New Chat
+        </button>
+    </div>
+</div>
+
+    {% for panel in extension_sidebars() %}
+    {# the owning module's settings are exposed to the included panel as
+       `module_config` (a loop-scoped set is visible to includes) #}
+    {% set module_config = panel.config %}
+    <div class="sidebar-panel" x-show="sidebarTab === '{{ panel.module }}/{{ panel.name }}' && ($store.ui.isMobile || !$store.ui.sidebarCollapsed)" x-cloak>
+        {% include panel.template %}
+    </div>
+    {% endfor %}
 </div>

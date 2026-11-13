@@ -26,9 +26,11 @@ if not os.path.exists(user_channel_path):
 
 import core.config
 import core.storage
+import core.search
 import core.module
 import core.commands
 import core.context
+import core.tool_loader
 import core.toolcalls
 import core.messages
 import core.chat
@@ -36,6 +38,8 @@ import core.turns
 import core.channel
 
 import core.modules
+import core.module_manager
+import core.http_sse
 import core.api
 
 # handle first run

@@ -18,6 +18,76 @@ const AudioManager = {
     processingSound: null, // Track processing sound state
     processingStartTime: 0, // Track when processing started
     toneTimer: null, // Timer for processing tones
+    processingChain: null,
+    synthLPF: null,
+
+    enabledFlags: null,
+    typingFreq: null,
+    tokenFreq: null,
+
+    refreshSettings: function() {
+        // drop the cached enabled-flags so the next play() re-reads from storage
+        this.enabledFlags = null;
+    },
+
+    isSoundEnabled: function(id) {
+        if (this.enabledFlags === null) {
+            const flags = {};
+            const ids = ['send_message', 'response_start', 'processing', 'typewriter',
+                         'typing', 'token', 'completion', 'reasoning_end'];
+            for (const sid of ids) {
+                let stored = null;
+                try { stored = localStorage.getItem(`${sid}SoundEnabled`); } catch (e) {}
+                flags[sid] = stored !== null ? stored === 'true' : this.SOUND_DEFAULTS[sid] !== false;
+            }
+            this.enabledFlags = flags;
+        }
+        return Boolean(this.enabledFlags[id]);
+    },
+
+    getSynthLPF: function(ctx) {
+        if (this.synthLPF) return this.synthLPF;
+
+        const lpf = ctx.createBiquadFilter();
+        lpf.type = 'lowpass';
+        lpf.frequency.value = 1800;
+        lpf.Q.value = 0.8;
+        lpf.connect(this.masterGainNode);
+
+        this.synthLPF = lpf;
+        return lpf;
+    },
+
+    getProcessingChain: function(ctx) {
+        if (this.processingChain) return this.processingChain;
+
+        const convolver = ctx.createConvolver();
+        const masterFilter = ctx.createBiquadFilter();
+
+        // Create atmospheric reverb
+        const rate = ctx.sampleRate;
+        const length = rate * 1.2;
+        const impulse = ctx.createBuffer(2, length, rate);
+        const dataL = impulse.getChannelData(0);
+        const dataR = impulse.getChannelData(1);
+        for (let i = 0; i < length; i++) {
+            const decay = Math.pow(1 - i / length, 2.5) * Math.sin((i / length) * Math.PI);
+            dataL[i] = (Math.random() * 2 - 1) * decay;
+            dataR[i] = (Math.random() * 2 - 1) * decay;
+        }
+        convolver.buffer = impulse;
+
+        // Filter to soften the tones
+        masterFilter.type = 'lowpass';
+        masterFilter.frequency.value = 1200;
+        masterFilter.Q.value = 0.5;
+
+        masterFilter.connect(convolver);
+        convolver.connect(this.masterGainNode);
+
+        this.processingChain = { convolver, masterFilter };
+        return this.processingChain;
+    },
 
     SOUND_DEFAULTS: {
         send_message: true,
@@ -35,6 +105,7 @@ const AudioManager = {
         return new Promise((resolve, reject) => {
             // Load volume from storage
             this.volume = parseFloat(localStorage.getItem('sfxVolume') || '1.0');
+            this.tokenVolume = parseFloat(localStorage.getItem('sfxTokenVolume') || '0.7');
 
             // 1. Open IndexedDB
             const request = indexedDB.open('TypewriterSoundsDB', 1);
@@ -121,10 +192,6 @@ const AudioManager = {
         this.tokenVolume = vol;
         localStorage.setItem('sfxTokenVolume', vol);
 
-        // Update the master gain node immediately if it exists
-        if (this.masterGainNode) {
-            this.masterGainNode.gain.value = vol;
-        }
     },
     setTokenFreq: function(freq) {
         this.tokenFreq = freq;
@@ -204,23 +271,7 @@ const AudioManager = {
 
     // Play the sound asynchronously to avoid UI blocking
     play: function(id) {
-        // ── Check Storage or Fallback to Built-in Defaults ──
-        let isEnabled = true;
-        try {
-            if (typeof localStorage !== 'undefined') {
-                const stored = localStorage.getItem(`${id}SoundEnabled`);
-                if (stored !== null) {
-                    isEnabled = stored === 'true';
-                } else {
-                    // If storage is empty/failed, use the built-in default
-                    isEnabled = this.SOUND_DEFAULTS[id] !== false;
-                }
-            }
-        } catch (e) {
-            isEnabled = this.SOUND_DEFAULTS[id] !== false;
-        }
-
-        if (!isEnabled) return;
+        if (!this.isSoundEnabled(id)) return;
 
         // ── Critical: Resume context synchronously on user gesture ──
         this.resumeContext();
@@ -231,7 +282,11 @@ const AudioManager = {
         }
 
         const buffer = this.buffers[id];
-        const typingFreq = Number(localStorage.getItem('typingFreq')) || 440;
+        // cached instead of a synchronous localStorage read per play() call
+        if (this.typingFreq === null) {
+            this.typingFreq = Number(localStorage.getItem('typingFreq')) || 440;
+        }
+        const typingFreq = this.typingFreq;
 
         if (!buffer) {
             const ctx = this.getAudioContext();
@@ -248,11 +303,9 @@ const AudioManager = {
             const vol = this.volume;
             const master = this.masterGainNode;
 
-            // ── Warmer: Lower cutoff + smoother roll-off ──
-            const lpf = ctx.createBiquadFilter();
-            lpf.type = 'lowpass';
-            lpf.frequency.value = 1800; // Reduced from 2kHz for more warmth
-            lpf.Q.value = 0.8; // Gentler slope, less harsh transition
+            // lpf creation moved below the token branch (token never used it)
+            // and now reuses a single cached filter via getSynthLPF().
+            let lpf = null;
 
             // ── Helper: Schedule a single sine tone with smoother attack ──
             const playTone = (freq, startTime, attack = 0, decay = 0.01, volScale = 0.8) => {
@@ -262,9 +315,10 @@ const AudioManager = {
                 osc.type = 'sine';
                 osc.frequency.value = freq;
 
+                // the shared lpf is pre-connected to master inside getSynthLPF(),
+                // so the per-call lpf.connect(master) here is removed.
                 osc.connect(gain);
                 gain.connect(lpf);
-                lpf.connect(master);
 
                 // 3ms attack for a rounder, less clicky onset
                 gain.gain.setValueAtTime(0, startTime);
@@ -285,10 +339,10 @@ const AudioManager = {
                 osc.frequency.value = cfg.freq * freqMultiplier;
                 panner.pan.value = pan;
 
+                // lpf pre-connected to master in getSynthLPF()
                 osc.connect(gain);
                 gain.connect(panner);
                 panner.connect(lpf);
-                lpf.connect(master);
 
                 const t2 = t + delay;
                 gain.gain.setValueAtTime(0, t2);
@@ -300,8 +354,13 @@ const AudioManager = {
             };
 
             if (id === 'token') {
-                const tokenFreq = Number(localStorage.getItem('sfxTokenFreq')) || 400;
-                const tokenVol = parseFloat(localStorage.getItem('sfxTokenVolume')) || 0.7; // New independent volume setting
+                // per-token localStorage reads replaced with in-memory values
+                // (kept in sync by setTokenFreq/setTokenVolume below)
+                if (this.tokenFreq === null) {
+                    this.tokenFreq = Number(localStorage.getItem('sfxTokenFreq')) || 400;
+                }
+                const tokenFreq = this.tokenFreq;
+                const tokenVol = this.tokenVolume;
                 ctx.resume();
 
                 const osc1 = ctx.createOscillator();
@@ -333,6 +392,8 @@ const AudioManager = {
             }
 
 
+            lpf = this.getSynthLPF(ctx);
+
             if (id === 'typing') {
                 const freq = typingFreq;
 
@@ -343,15 +404,11 @@ const AudioManager = {
                 const gain = ctx.createGain();
                 gain.gain.value = 0;
 
-                // Chain: osc → LPF → gain → master
-                osc.connect(lpf);
-                lpf.connect(gain);
-                gain.connect(master);
+                osc.connect(gain);
+                gain.connect(lpf);
 
                 osc.start(t);
 
-                // Envelope: 10ms attack, 100ms decay
-                // Adjusted volume to match token sound (~25%)
                 gain.gain.linearRampToValueAtTime(vol * 0.7, t + 0.01);
                 gain.gain.exponentialRampToValueAtTime(0.00001, t + 0.1);
                 osc.stop(t + 0.1);
@@ -430,12 +487,11 @@ const AudioManager = {
     },
 
     playProcessingSound: function() {
-        if (localStorage.getItem(`processingSoundEnabled`) !== 'true') {
+        if (!this.isSoundEnabled('processing')) {
             return;
         }
 
-        // Stop any sound currently playing immediately
-        if (this.processingSound) this.stopProcessingSound();
+        if (this.processingSound) return;
 
         // Synchronously resume context for mobile compatibility
         this.resumeContext();
@@ -458,33 +514,26 @@ const AudioManager = {
             // --- FALLBACK TO SYNTH (Optional) ---
             // Plays soft, intermittent waiting tones
             const ctx = this.getAudioContext();
-            const convolver = ctx.createConvolver();
-            const masterFilter = ctx.createBiquadFilter();
 
-            // Create atmospheric reverb
-            const rate = ctx.sampleRate;
-            const length = rate * 1.2;
-            const impulse = ctx.createBuffer(2, length, rate);
-            const dataL = impulse.getChannelData(0);
-            const dataR = impulse.getChannelData(1);
-            for (let i = 0; i < length; i++) {
-                const decay = Math.pow(1 - i / length, 2.5) * Math.sin((i / length) * Math.PI);
-                dataL[i] = (Math.random() * 2 - 1) * decay;
-                dataR[i] = (Math.random() * 2 - 1) * decay;
-            }
-            convolver.buffer = impulse;
-
-            // Filter to soften the tones
-            masterFilter.type = 'lowpass';
-            masterFilter.frequency.value = 1200;
-            masterFilter.Q.value = 0.5;
+            // reuse the cached reverb chain
+            const chain = this.getProcessingChain(ctx);
+            const masterFilter = chain.masterFilter;
 
             // Single frequency
             const baseFrequency = 196.00;
 
+            // if a previous stop() muted the cached chain to kill the reverb
+            // tail, reconnect it before scheduling new tones
+            if (chain.muted) {
+                chain.convolver.connect(this.masterGainNode);
+                chain.muted = false;
+            }
+
             // --- TRACK START TIME ---
             this.processingStartTime = ctx.currentTime;
             let isPlaying = true;
+            let activeOsc = null;
+            let activeGain = null;
 
             const playSoftTone = () => {
                 if (!isPlaying) return;
@@ -512,11 +561,15 @@ const AudioManager = {
 
                 osc.connect(gain);
                 gain.connect(masterFilter);
-                masterFilter.connect(convolver);
-                convolver.connect(this.masterGainNode);
 
                 osc.start(now);
                 osc.stop(now + 1.5);
+
+                activeOsc = osc;
+                activeGain = gain;
+                osc.onended = () => {
+                    if (activeOsc === osc) { activeOsc = null; activeGain = null; }
+                };
 
                 // Fixed 2 second delay for the next tone
                 const delay = 2000;
@@ -526,11 +579,33 @@ const AudioManager = {
             // Start the first tone (it will internally wait if < 0.2s elapsed)
             playSoftTone();
 
-            // Cleanup function
             this.processingSound = {
                 stop: () => {
                     isPlaying = false;
                     if (this.toneTimer) clearTimeout(this.toneTimer);
+
+                    if (activeOsc) {
+                        try {
+                            const now = ctx.currentTime;
+                            // fade out over 20ms to avoid a click, then stop
+                            if (activeGain) {
+                                activeGain.gain.cancelScheduledValues(now);
+                                activeGain.gain.setValueAtTime(activeGain.gain.value, now);
+                                activeGain.gain.linearRampToValueAtTime(0, now + 0.02);
+                            }
+                            activeOsc.onended = null;
+                            activeOsc.stop(now + 0.02);
+                        } catch(e) {}
+                        activeOsc = null;
+                        activeGain = null;
+                    }
+
+                    // cut the reverb tail by disconnecting the chain from output
+                    if (!chain.muted) {
+                        try { chain.convolver.disconnect(); } catch(e) {}
+                        chain.muted = true;
+                    }
+
                     this.processingSound = null;
                 }
             };

@@ -1,6 +1,9 @@
 .message-wrapper {
     display: flex;
     flex-direction: column;
+    margin: 0 auto;
+    width: var(--chat-content-width, 100%);
+    min-width: var(--chat-content-width, 100%);
 
     .message {
         display: flex;
@@ -9,13 +12,19 @@
         padding: 14px 16px;
         border-radius: var(--radius-sm);
         border: 1px solid transparent;
-        box-shadow: var(--shadow-soft);
+        /* box-shadow: var(--shadow-soft); */
         word-wrap: break-word;
         overflow: hidden;
         position: relative;
         max-width: var(--message-max-width, 75%);
         width: fit-content;
         backdrop-filter: blur(10px);
+
+        /* the edit textarea fills the relative width (100%) */
+        &:has(.editing) {
+            width: 100%;
+            max-width: 100%;
+        }
 
         .command {
             font-family: monospace;
@@ -155,17 +164,25 @@
         }
 
         &.assistant {
-            background: var(--bg-message-ai);
-            border: 1px solid var(--border-message);
-            border-bottom-left-radius: var(--radius-sm);
+            background: none;
+            backdrop-filter: none;
+            border: none;
+            box-shadow: none;
             color: var(--text-primary);
-            min-width: 80px;
+            min-width: 100%;
+            width: 100%;
+            flex-shrink: 0;
 
-            gap: var(--gap);
+            gap: 0;
+
+            .segment {
+                gap: 2px;
+            }
 
             .content.reasoning {
                 font-family: monospace;
             }
+
         }
 
         &.user, &.assistant {
@@ -176,7 +193,7 @@
                 
                 textarea {
                     width: 100%;
-                    min-height: 60px;
+                    min-height: 240px;
                     padding: 8px;
                     background: var(--bg-input);
                     color: var(--text-primary);

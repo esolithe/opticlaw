@@ -16,6 +16,12 @@ class ExampleModule(core.module.Module):
     #   CONFIGURATION
     # -------------------------
 
+    # -- AI GENERATED CODE (Qwen3.8 Flash Next) :: (2026-10-12)
+    # category groups your module together with others in supported settings UI's
+    # (such as the webUI). use a short human readable name like "Web" or "Wellness".
+    # leave empty to have the module show up as uncategorized.
+    category = ""
+
     # settings defined here will show up in all channels that support it (such as the webUI)
     # for the user to change as they see fit
     # valid types: string, long_text, boolean, number, percentage, select
@@ -102,9 +108,12 @@ class ExampleModule(core.module.Module):
     #   AI TOOLS
     # -------------------------
 
-    # tools are simply class methods. the framework will read the definition
-    # and translate the name, arguments and docstring to a tool usable by the AI
-    # tools don't need a special decorator
+    # tools are class methods marked with @core.module.tool. the framework
+    # reads the definition and translates the name, arguments and docstring
+    # to a tool usable by the AI. without the decorator, a method is NOT a
+    # tool - not even when it's public (the old implicit convention where
+    # every public callable became a tool is retired).
+    @core.module.tool
     async def ping(self, latency: int):
         """
         Simulates a ping to the user.
@@ -146,7 +155,9 @@ class ExampleModule(core.module.Module):
         self.channel.log(self.name, "whatever message you want")
 
     async def _private_method(self):
-        # private methods are not added as tools, and are invisible to the AI. use for helper methods and the like.
+        # methods without the @core.module.tool decorator are invisible to the AI,
+        # whatever their name. the underscore is just the style convention for
+        # "definitely not a tool" - use it for helper methods and the like.
         pass
 
     # -------------------------

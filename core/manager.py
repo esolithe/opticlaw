@@ -7,7 +7,8 @@ import time
 import asyncio
 import json_repair
 import inspect
-import re
+import importlib
+import regex as re
 import traceback
 
 global_instance = None
@@ -26,18 +27,28 @@ class Manager:
         self.channel = None # current active channel. gets dynamically switched around
 
         self.modules = {}
+        self.module_manager = core.module_manager.ModuleManager(self)
         self.user_modules = {}
         self.broken_modules = [] # tracks modules that threw errors and skips them so that it doesn't break the whole framework
 
-        self.tools = []
-        self.tool_names = []
         self.pure_mode = False
         self.coding_mode = False
 
         self._restart_requested = False
+        self._hard_restart_requested = False
         self._prevent_double_shutdown = False
 
+        self.log_buffer = []
         self.started = False
+
+    # --- tools properties (read-only views of the channel's active set) ---
+    @property
+    def tools(self):
+        return self.channel.tool_loader.active_tools if self.channel else []
+
+    @property
+    def tool_names(self):
+        return self.channel.tool_loader.active_names if self.channel else []
 
     def _remove_async_task(self, task):
         self._async_tasks.discard(task)
@@ -52,6 +63,7 @@ class Manager:
         ) and not core.quiet:
             cat_str = rf"[{category.upper()}] " if category else ""
             print(f"{cat_str}{message}", flush=True)
+            self.log_buffer.append((category, message))
             return
 
         for name, channel in self.channels.items():
@@ -63,11 +75,16 @@ class Manager:
             channel.log_error(message, e)
 
     def _drain_log_buffers(self):
-        if core.modules.log_buffer:
-            for category, message in core.modules.log_buffer:
-                self.log(category, message)
-            # clear it so we can re-run this to get more from the buffer
-            core.modules.log_buffer.clear()
+        if self.log_buffer:
+            for category, message in self.log_buffer:
+                for name, channel in self.channels.items():
+                    if name == "cli":
+                        # skip
+                        continue
+
+                    channel.on_log(category, message)
+
+            self.log_buffer.clear()
 
     async def _load_channels(self, storage, channels, enabled_channels, is_user_channels=False):
         # install dependencies
@@ -155,7 +172,7 @@ class Manager:
                 core.log(loaded_module.name, f"Error during module internal _start() method: {core.detail_error(e)}")
                 continue
 
-            await self.load_module_tools(loaded_module)
+            await self.register_module_tools(loaded_module)
 
             storage[loaded_module.name] = loaded_module
 
@@ -239,10 +256,6 @@ class Manager:
         global global_instance
         global_instance = self
 
-        # display any error messages that were emitted
-        # by the framework before the manager was initialized
-        self._drain_log_buffers()
-
         self.log("core", "Loading modules..")
         if enabled_modules:
             await self._load_modules(self.modules, modules, enabled_modules)
@@ -251,6 +264,14 @@ class Manager:
             self.log("core", "Loading user modules..")
             await self._load_modules(self.modules, user_modules, enabled_user_modules, is_user_modules=True)
 
+        # Build each channel's active tools array now that the catalogs are
+        # complete: dynamic loading on -> meta tools + preloaded modules;
+        # off -> every loadable tool natively.
+        if not core.config.get("model", "dynamic_tool_loading", default=True):
+            self.log("core", "Dynamic tool loading is disabled. Loading all tools at startup.")
+        for channel in self.channels.values():
+            channel.tool_loader.refresh()
+
         if not self.args.disable_auto_installer:
             # uninstall dependencies for disabled modules (only if deps are still installed)
             disabled_channels = core.config.get("channels", "disabled", [])
@@ -258,29 +279,27 @@ class Manager:
             disabled_modules = core.config.get("modules", "disabled", [])
             disabled_user_modules = core.config.get("user_modules", "disabled", [])
 
+            # every section is checked, so that even when nothing in it is enabled,
+            # it still cleans up loose dependencies
+            removals = (
+                ("channels", disabled_channels),
+                ("user_channels", disabled_user_channels),
+                ("modules", disabled_modules),
+                ("user_modules", disabled_user_modules),
+            )
+
             system_changed = False
-            if enabled_channels:
-                for chan_name in disabled_channels:
-                    uninstalled = await core.modules.uninstall_module_deps(channels, chan_name, self)
-                    if uninstalled and not system_changed:
-                        system_changed = True
+            for package_name, names in removals:
+                if not names:
+                    continue
 
-            if enabled_user_channels:
-                for chan_name in disabled_user_channels:
-                    uninstalled = await core.modules.uninstall_module_deps(user_channels, chan_name, self)
-                    if uninstalled and not system_changed:
-                        system_changed = True
-
-            if enabled_modules:
-                for mod_name in disabled_modules:
-                    uninstalled = await core.modules.uninstall_module_deps(modules, mod_name, self)
-                    if uninstalled and not system_changed:
-                        system_changed = True
-
-            if enabled_user_modules:
-                for mod_name in disabled_user_modules:
-                    uninstalled = await core.modules.uninstall_module_deps(user_modules, mod_name, self)
-                    if uninstalled and not system_changed:
+                try:
+                    package = importlib.import_module(package_name)
+                except Exception:
+                    # the user_* folders only exist after creation
+                    continue
+                for name in names:
+                    if await core.modules.uninstall_module_deps(package, name, self):
                         system_changed = True
 
             if system_changed:
@@ -290,13 +309,6 @@ class Manager:
         elapsed_timestamp = time.time() - startup_timestamp
         self.log("core", f"Startup completed in {elapsed_timestamp:.2f}s")
         self.log("", "-"*40)
-
-        # Attempt API connection but don't fail if it doesn't work
-        self.log("API", "Connecting..")
-
-        connected = await self.API.connect()
-        if isinstance(connected, core.api.APIError):
-            self.log("API", str(connected))
 
         # start the channels (execute their .run() method)
         for channel_name, channel in self.channels.items():
@@ -320,6 +332,9 @@ class Manager:
             self._async_tasks.add(asyncio.create_task(cli_chan.run()))
             self._async_tasks.add(asyncio.create_task(cli_chan._start_push_queue()))
 
+        # send all print()'ed logs to the channels as actual log events
+        self._drain_log_buffers()
+
         self.started = True
 
         try:
@@ -339,12 +354,19 @@ class Manager:
 
         if self._restart_requested:
             return "restart"
+        elif self._hard_restart_requested:
+            return "hard_restart"
 
         return None
 
-    async def restart(self):
-        self.log("core", "Restarting server..")
-        self._restart_requested = True
+    async def restart(self, hard=False):
+        hard_str = "Hard " if hard else ""
+        self.log("core", f"{hard_str}Restarting server..")
+        if not hard:
+            self._restart_requested = True
+        else:
+            self._hard_restart_requested = True
+
         await self.shutdown()
 
     async def shutdown(self):
@@ -383,6 +405,11 @@ class Manager:
                 except Exception as e:
                     self.log_error(f"Error shutting down {channel_name}", e)
 
+        try:
+            await self.API.disconnect()
+        except Exception as e:
+            self.log_error("Error disconnecting from the API", e)
+
         # remove the global instance
         global global_instance
         global_instance = None
@@ -403,7 +430,7 @@ class Manager:
         self.started = False
         self.log("core", "Shutdown complete")
 
-    async def toggle_module(self, module_name: str, autorestart=True):
+    async def toggle_module(self, module_name: str):
         modules = core.config.config["modules"]
         user_modules = core.config.config["user_modules"]
 
@@ -430,15 +457,9 @@ class Manager:
         if toggled:
             core.config.config.save()
 
-            if autorestart:
-                if self.channel:
-                    await self.channel.push(f"{module_name.capitalize()} module {'enabled' if new_state else 'disabled'}. Restarting to apply change..")
-                await asyncio.sleep(0.1)
-                await self.channel.manager.restart()
-
         return toggled
 
-    async def toggle_channel(self, channel_name: str, autorestart=True):
+    async def toggle_channel(self, channel_name: str):
         channels = core.config.config["channels"]
         user_channels = core.config.config["user_channels"]
 
@@ -465,12 +486,6 @@ class Manager:
         if toggled:
             core.config.config.save()
 
-            if autorestart:
-                if self.channel:
-                    await self.channel.push(f"{channel_name.capitalize()} channel {'enabled' if new_state else 'disabled'}. Restarting to apply change..")
-                await asyncio.sleep(0.1)
-                await self.channel.manager.restart()
-
         return toggled
 
     async def reload_module(self, module_name: str):
@@ -485,7 +500,7 @@ class Manager:
         self.log("core", f"Reloading module: {module_name}")
 
         # remove old tools for this module
-        await self.unload_module_tools(module)
+        await self.unregister_module_tools(module)
 
         # run the module shutdown hook
         try:
@@ -501,128 +516,10 @@ class Manager:
             return False
 
         # re-add the module tools based on the new state (after on_ready's modifications)
-        await self.load_module_tools(module)
+        await self.register_module_tools(module)
 
         return True
 
-    async def get_system_prompt(self):
-        # only run on_system_prompt if the manager has a channel reference
-        if not self.channel:
-            return ""
-
-        if self.pure_mode:
-            return ""
-
-        system_prompt = []
-
-        active_character = None
-        if self.channel:
-            active_character = self.channel.context.chat.get("metadata").get("character")
-
-        # automatically insert system prompts returned by modules (such as memory)
-        sysprompt_top = []
-        sysprompt_middle = []
-        sysprompt_bottom = []
-
-        for module_name, module in self.modules.items():
-            if not core.config.get("model").get("use_tools", False) and module_name not in core.modules.nonagentic:
-                # skip most prompts if tools are turned off
-                continue
-
-            if module_name in self.broken_modules:
-                continue
-
-            char_modules_exempt = ["characters"]
-            if (
-                self.modules.get("writing_style") and
-                self.modules.get("characters") and
-                self.modules["characters"].config.get("use_writing_style")
-            ):
-                char_modules_exempt.append("writing_style")
-
-            if active_character and module_name not in char_modules_exempt and "characters" in self.modules.keys():
-                # if a character is currently active, display ONLY the character system prompt
-                char_disable_agent_prompts = self.modules["characters"].config.get("disable_agent_prompts_when_character_active")
-
-                if char_disable_agent_prompts:
-                    continue
-
-            try:
-                module_sysprompt = await module.on_system_prompt()
-            except Exception as e:
-                self.log("module error", f"{module_name}: in on_system_prompt(): {core.detail_error(e)}")
-                self.broken_modules.append(module_name)
-                continue
-
-            if module_sysprompt and (module_name not in core.config.get("modules").get("disabled_prompts", [])):
-                # default to module name
-                sysprompt_header = ' '.join(module_name.split('_')).capitalize()
-                if hasattr(module, "header") and module.header:
-                    # but allow overriding the header
-                    sysprompt_header = module.header
-                prompt_chunk = f"# {sysprompt_header}\n{str(module_sysprompt).strip()}"
-
-                if module_name in ("agent_framework_awareness", "identity", "memory", "writing_style"):
-                    sysprompt_top.append(prompt_chunk)
-                elif module_name in ("time", "system"):
-                    sysprompt_bottom.append(prompt_chunk)
-                else:
-                    sysprompt_middle.append(prompt_chunk)
-
-        system_prompt = sysprompt_top+sysprompt_middle+sysprompt_bottom
-
-        if system_prompt:
-            return "\n\n".join(system_prompt)
-        else:
-            return ""
-
-    async def get_end_prompt(self, prevent_recursion=False):
-        # only run if the manager has a channel reference
-        if not self.channel:
-            return None
-
-        # don't return endprompt if characters module is active
-        active_character = None
-        if self.channel:
-            active_character = self.channel.context.chat.get("metadata").get("character")
-
-        # automatically insert system prompts returned by modules (such as memory)
-        histend_prompt = []
-        for module_name, module in self.modules.items():
-            if module_name in self.broken_modules:
-                continue
-
-            # if a character is active, use only the character module's endprompt
-            if active_character and module_name != "characters":
-                continue
-
-            if prevent_recursion and module_name == "token_threshold":
-                # if we try to count the system prompt's tokens from the function that counts tokens.. we get recursion
-                continue
-
-            if not core.config.get("model").get("use_tools", False) and module_name not in core.modules.nonagentic:
-                # skip most prompts if tools are turned off
-                continue
-
-            try:
-                module_sysprompt = await module.on_end_prompt()
-            except Exception as e:
-                self.log("module error", f"{module_name}: in on_end_prompt(): {core.detail_error(e)}")
-                self.broken_modules.append(module_name)
-                continue
-
-            if module_sysprompt:
-                sysprompt_header = ' '.join(module_name.split('_')).capitalize()
-                if hasattr(module, "header") and module.header:
-                    # but allow overriding the header
-                    sysprompt_header = module.header
-                prompt_chunk = f"# {sysprompt_header}\n{str(module_sysprompt).strip()}"
-                histend_prompt.append(prompt_chunk)
-
-        if histend_prompt:
-            return "\n\n".join(histend_prompt)
-        else:
-            return ""
 
     async def get_settings_structure(self):
         if not self.modules:
@@ -635,179 +532,18 @@ class Manager:
         return settings_structure
 
     # --- tools ---
-    def parse_tool_docstring(self, docstring):
-        """
-        Parses Google-style docstring to extract param descriptions
-        and returns a cleaned docstring without the Args/Returns sections.
-        """
-        if not docstring:
-            return {}, ""
+    async def register_module_tools(self, module):
+        """Register a module's tools in the catalog"""
+        for channel in self.channels.values():
+            channel.tool_loader.register_module(module)
+            # rebuild meta descriptions + active array with the new catalog
+            channel.tool_loader.refresh()
 
-        descriptions = {}
-        lines = docstring.split("\n")
-        clean_lines = []
-
-        skip_section = False
-        section_headers = {"Args:", "Returns:", "Raises:", "Note:", "Example:"}
-
-        for line in lines:
-            stripped = line.strip()
-
-            # Check if we're entering a section to skip
-            if any(stripped.startswith(header) for header in section_headers):
-                skip_section = True
-                continue
-
-            # Check if we're still in a skip section (indented line)
-            if skip_section:
-                # Empty line or unindented line means end of section
-                if stripped == "" or (line and not line[0].isspace() and stripped):
-                    # But if it's another section header, stay in skip mode
-                    if not any(stripped.startswith(h) for h in section_headers):
-                        skip_section = False
-                        if stripped:
-                            clean_lines.append(line)
-                continue
-
-            clean_lines.append(line)
-
-        # Now parse Args section separately for descriptions
-        in_args = False
-        current_param = None
-        current_desc = []
-
-        for line in lines:
-            stripped = line.strip()
-
-            if stripped.startswith("Args:"):
-                in_args = True
-                continue
-
-            if in_args:
-                if any(stripped.startswith(h) for h in {"Returns:", "Raises:", "Note:", "Example:"}):
-                    if current_param and current_desc:
-                        descriptions[current_param] = " ".join(current_desc)
-                    break
-
-                if not stripped:
-                    continue
-
-                # Match: "param_name: description" or "param_name (type): description"
-                match = re.match(r"(\w+)(?:\s*\([^)]*\))?\s*:\s*(.+)", stripped)
-                if match:
-                    # Save previous param if exists
-                    if current_param and current_desc:
-                        descriptions[current_param] = " ".join(current_desc)
-
-                    current_param = match.group(1)
-                    current_desc = [match.group(2)]
-                elif current_param and stripped:
-                    # Continuation of previous param description
-                    current_desc.append(stripped)
-
-        # Save last param
-        if current_param and current_desc:
-            descriptions[current_param] = " ".join(current_desc)
-
-        # Clean up the description (remove leading/trailing whitespace, empty lines)
-        clean_doc = "\n".join(clean_lines).strip()
-
-        return descriptions, clean_doc
-
-    async def load_module_tools(self, module):
-        for func_name in type(module).__dict__:
-            if func_name.startswith("_"):
-                # skip private methods and other private properties
-                continue
-
-            if func_name == "result" or func_name.startswith("on_"):
-                # builtin function
-                continue
-
-            if func_name in module.disabled_tools:
-                continue
-
-            try:
-                func_obj = getattr(module, func_name)
-            except:
-                continue
-
-            if not callable(func_obj):
-                continue
-
-            if getattr(func_obj, "_is_command", False):
-                # decorated command in a module
-                continue
-
-            # if there's a docstring, make sure to pass that on to the LLM
-            docstring = ""
-            if "__doc__" in dir(func_obj):
-                param_descriptions, docstring = self.parse_tool_docstring(func_obj.__doc__)
-
-            # dynamically load class methods from classes
-            func_params = dict(inspect.signature(func_obj).parameters)
-
-            func_params_translated = {}
-            required_args = []
-            # add method arguments (parameters) to the tool call object
-            for param_name, param in func_params.items():
-                # detect the type of a parameter
-                param_annotation = param.annotation
-                if param_annotation == inspect.Parameter.empty:
-                    param_type = "string"
-                elif param_annotation == str:
-                    param_type = "string"
-                elif param_annotation == int:
-                    param_type = "integer"
-                elif param_annotation == bool:
-                    param_type = "boolean"
-                elif param_annotation == list:
-                    param_type = "array"
-                elif param_annotation == dict:
-                    param_type = "object"
-
-                # add params without a default value to the required params list
-                if param.default == inspect.Parameter.empty:
-                    required_args.append(param_name)
-
-                func_param_desc = param_descriptions.get(param_name)
-                func_params_translated[param_name] = {"type": param_type}
-
-                # only insert param description if present
-                if func_param_desc:
-                    func_params_translated[param_name]["description"] = func_param_desc
-
-            # build toolcall object
-            tool = {
-                "type": "function",
-                "function": {
-                    "name": f"{module.name}_{func_name}",
-                    "parameters": {
-                        "type": "object",
-                        "properties": func_params_translated,
-                        "required": required_args,
-                        "additionalProperties": False,
-                    },
-                    "strict": True,
-                },
-            }
-
-            # only insert docstring if it's present
-            if docstring:
-                tool["function"]["description"] = docstring
-
-            self.tools.append(tool)
-            self.tool_names.append(tool["function"]["name"])
-
-    async def unload_module_tools(self, module):
-        """unloads all modules belonging to the specified module"""
-
-        self.tools = [t for t in self.tools
-                     if not t["function"]["name"].startswith(f"{module.name}_")]
-        self.tool_names = [n for n in self.tool_names
-                          if not n.startswith(f"{module.name}_")]
-        module.disabled_tools = []
-
+    async def unregister_module_tools(self, module):
+        """Unregister a module's tools from the catalog and rebuild active."""
+        for channel in self.channels.values():
+            channel.tool_loader.unregister_module(module)
+            channel.tool_loader.refresh()
         return True
 
     async def add_module_class(self, module, is_user_module=False):

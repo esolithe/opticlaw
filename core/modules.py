@@ -1,18 +1,23 @@
 import os
+import regex as re
+import ast
 import core
-import re
 import inspect
 import sys
+import shutil
 import subprocess
-import ast
-import traceback
+import asyncio
+import importlib
 import importlib.util
+import tomllib
+import traceback
 from packaging.requirements import Requirement, InvalidRequirement
 
+# get the correct importlib stuff
 try:
-    from importlib.metadata import version, PackageNotFoundError, packages_distributions
+    from importlib.metadata import version, distributions, PackageNotFoundError, packages_distributions
 except ImportError:
-    from importlib_metadata import version, PackageNotFoundError, packages_distributions
+    from importlib_metadata import version, distributions, PackageNotFoundError, packages_distributions
 
 # modules that should have their prompts inserted even when tools are off
 nonagentic = ("characters", "writing_style", "time")
@@ -23,12 +28,11 @@ reported_missing_console = set()
 dist_to_import_cache = None
 
 # buffer the warnings and errors so that we can propagate them to manager.log()
-log_buffer = []
 def log(category, message):
     if core.manager.global_instance:
         core.manager.global_instance.log(category, message)
     else:
-        log_buffer.append((category, message))
+        print(f"[{category.upper()}] {message}")
 
 # --------------------------------------
 # dependency auto-installer/uninstaller
@@ -39,6 +43,8 @@ def _extract_deps_from_file(file_path):
         with open(file_path, 'r', encoding="utf-8") as f:
             tree = ast.parse(f.read())
 
+        # there has GOT to be a cleaner way..
+        # this is awful syntax lol
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef):
                 for item in node.body:
@@ -54,44 +60,197 @@ def _extract_deps_from_file(file_path):
         log("core", f"could not parse dependencies from {file_path}: {e}")
     return []
 
+def _pip_prefix():
+    """use uv's pip interface when available, plain pip otherwise"""
+    uv = shutil.which("uv")
+    if uv:
+        return [uv, "pip"], True
+    return [sys.executable, "-m", "pip"], False
+
 def _install_deps(module_name, packages, manager):
-    """install pip packages"""
+    """install packages using uv (or pip as fallback)"""
     if not packages:
         return
-    manager.log("core", f"installing dependencies for {module_name}: {', '.join(packages)}")
+
+    prefix, using_uv = _pip_prefix()
+    manager.log("core", f"installing dependencies for {module_name} with {'uv' if using_uv else 'pip'}: {', '.join(packages)}")
+
+    cmd = [*prefix, "install", "--quiet"]
+    if using_uv:
+        cmd += ["--python", sys.executable]
+    cmd += packages
 
     try:
-        subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", "--quiet"] + packages,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
+        subprocess.check_call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except subprocess.CalledProcessError as e:
         manager.log(module_name, f"dependency install failed: {core.detail_error(e)}")
 
 def _uninstall_deps(module_name, packages, manager):
-    """uninstall pip packages"""
+    """uninstall packages using uv (or pip as fallback)"""
     if not packages:
         return
-    manager.log("core", f"uninstalling dependencies for {module_name}: {', '.join(packages)}")
+
+    prefix, using_uv = _pip_prefix()
+    manager.log("core", f"uninstalling dependencies for {module_name} with {'uv' if using_uv else 'pip'}: {', '.join(packages)}")
+
+    cmd = [*prefix, "uninstall", "--quiet"]
+    if using_uv:
+        cmd += ["--python", sys.executable]
+    else:
+        cmd += ["-y"]
+    cmd += packages
 
     try:
-        subprocess.check_call(
-            [sys.executable, "-m", "pip", "uninstall", "-y", "--quiet"] + packages,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
+        subprocess.check_call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except subprocess.CalledProcessError as e:
         manager.log(module_name, f"dependency uninstall failed: {core.detail_error(e)}")
 
+ENTRY_FILENAMES = ("module.py", "channel.py")
+reported_init = []
+
 def _get_module_file_path(package, module_name):
-    """get the file path for a module without importing it"""
-    import importlib.util
-    
-    spec = importlib.util.find_spec(f"{package.__name__}.{module_name}")
-    if spec and spec.origin:
-        return spec.origin
+    """get the entry-file path for a module folder without importing it"""
+    if not hasattr(package, '__path__'):
+        return None
+
+    for sub_path in package.__path__:
+        mod_dir = os.path.join(sub_path, module_name)
+        if not os.path.isdir(mod_dir):
+            continue
+
+        # __init__.py is not allowed in module/channel folders (it would shadow our custom loader)
+        if os.path.exists(os.path.join(mod_dir, "__init__.py")):
+            warn_key = f"{package.__name__}.{module_name}"
+            if warn_key not in reported_init:
+                reported_init.append(warn_key)
+                log("core", f"skipping {warn_key}: __init__.py is not allowed in module/channel folders, please remove it")
+            continue
+
+        for entry in ENTRY_FILENAMES:
+            candidate = os.path.join(mod_dir, entry)
+            if os.path.isfile(candidate):
+                return candidate
     return None
+
+def discover_module_names(package):
+    """list module/channel names from the filesystem without importing them"""
+    names = []
+    if not hasattr(package, '__path__'):
+        return names
+
+    for sub_path in package.__path__:
+        if not os.path.isdir(sub_path):
+            continue
+
+        try:
+            entries = sorted(os.listdir(sub_path))
+        except OSError:
+            continue
+
+        for entry_name in entries:
+            if entry_name.startswith(('_', '.')):
+                continue
+            if _get_module_file_path(package, entry_name) is None:
+                continue
+            if entry_name not in names:
+                names.append(entry_name)
+
+    return sorted(names)
+
+def import_entry(package, module_name, reload=False):
+    """import a module/channel folder as a real package using its entry file, so relative imports work inside it"""
+    module_file = _get_module_file_path(package, module_name)
+    if not module_file:
+        raise ImportError(f"no entry file ({' or '.join(ENTRY_FILENAMES)}) found for {package.__name__}.{module_name}")
+
+    full_name = f"{package.__name__}.{module_name}"
+    mod_dir = os.path.dirname(module_file)
+
+    existing = sys.modules.get(full_name)
+    if existing is not None:
+        if getattr(existing, "__file__", None):
+            # already a loaded module, so reload it instead
+            if reload:
+                importlib.reload(existing)
+            return existing
+
+        # namespace package (e.g. someone did `import channels.webui.api` first): promote it in-place
+        existing.__path__ = [mod_dir]
+        spec = importlib.util.spec_from_file_location(
+            full_name, module_file, submodule_search_locations=[mod_dir]
+        )
+        existing.__spec__ = spec
+        existing.__file__ = module_file
+
+        try:
+            spec.loader.exec_module(existing)
+        except Exception:
+            # don't leave a half-initialized module behind, or later calls would treat it as fully loaded
+            del sys.modules[full_name]
+            raise
+
+        setattr(package, module_name, existing)
+        return existing
+
+    spec = importlib.util.spec_from_file_location(
+        full_name, module_file, submodule_search_locations=[mod_dir]
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[full_name] = module
+
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        del sys.modules[full_name]
+        raise
+
+    setattr(package, module_name, module)
+    return module
+
+class _EntryFileFinder:
+    """meta path finder that resolves `import modules.<name>` / `import channels.<name>` etc to folder entry files (module.py/channel.py),
+    since those folders intentionally have no __init__.py and are invisible to python's default finders"""
+    _ROOTS = ("modules", "user_modules", "channels", "user_channels")
+
+    def find_spec(self, fullname, path=None, target=None):
+        parts = fullname.split(".")
+        if len(parts) != 2 or parts[0] not in self._ROOTS:
+            return None
+
+        try:
+            package = __import__(parts[0])
+        except ImportError:
+            return None
+
+        module_file = _get_module_file_path(package, parts[1])
+        if not module_file:
+            return None
+
+        # if dependencies are missing, don't throw an error, simply don't execute the main module.py.
+        # but let things still import from other files in the module's folder
+        # used for webui/api.py, among other things
+        deps = _extract_deps_from_file(module_file)
+        if deps and _check_missing_deps(deps):
+            return None
+
+        return importlib.util.spec_from_file_location(
+            fullname, module_file, submodule_search_locations=[os.path.dirname(module_file)]
+        )
+
+if not any(isinstance(f, _EntryFileFinder) for f in sys.meta_path):
+    sys.meta_path.insert(len(sys.path_hooks), _EntryFileFinder())
+
+def _get_base_dependencies():
+    """dependencies openlumara's core always needs, from pyproject.toml"""
+    try:
+        with open(core.get_path("pyproject.toml"), "rb") as f:
+            return tomllib.load(f).get("project", {}).get("dependencies", [])
+    except Exception:
+        return []
+
+def _dep_name(dep):
+    """package name from a requirement string, e.g. 'python-telegram-bot>=1.0[e2e]' -> 'python-telegram-bot'"""
+    return re.split(r"[<>=!~;\[\s]", dep, maxsplit=1)[0].strip().lower().replace("_", "-")
 
 def _normalize_dist_name(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
@@ -207,9 +366,33 @@ def _check_missing_deps(deps):
 
     missing = []
     for dep in deps:
-        if not _is_dep_available(dep):
+        try:
+            # if not _is_dep_available(dep):
+            version(_dep_name(dep))
+        except PackageNotFoundError:
             missing.append(dep)
     return missing
+
+def _installed_requirements():
+    """map of installed package name -> the names it requires (extras and markers included)"""
+    requires = {}
+    for dist in distributions():
+        name = dist.metadata["Name"]
+        if name:
+            requires[_dep_name(name)] = [_dep_name(req) for req in (dist.requires or [])]
+    return requires
+
+def _requirement_closure(roots, requires):
+    """every installed package reachable from roots through their requirements"""
+    reached = set()
+    stack = [root for root in roots if root in requires]
+    while stack:
+        name = stack.pop()
+        if name in reached:
+            continue
+        reached.add(name)
+        stack.extend(dep for dep in requires.get(name, ()) if dep in requires)
+    return reached
 
 async def install_module_deps(package, module_name, manager):
     """install dependencies for a module if missing"""
@@ -223,37 +406,38 @@ async def install_module_deps(package, module_name, manager):
 
     missing = _check_missing_deps(deps)
     if missing:
-        _install_deps(module_name, missing, manager)
+        # run pip in a thread so that it doesn't block the rest of the harness
+        await asyncio.to_thread(_install_deps, module_name, missing, manager)
         return True
 
     return False
 
+def _deps_of_enabled(section, package_name):
+    """gather declared dependencies from every enabled module/channel in a config section"""
+    try:
+        package = importlib.import_module(package_name)
+        enabled = core.config.get(section, "enabled", [])
+    except Exception:
+        # a missing or broken package only costs us this section's protections
+        return []
+
+    deps = []
+    for mod_name in enabled:
+        file_path = _get_module_file_path(package, mod_name)
+        if file_path:
+            deps.extend(_extract_deps_from_file(file_path))
+    return deps
+
 async def uninstall_module_deps(package, module_name, manager, exclude=None):
-    """uninstall dependencies for a module (only if deps are still installed)"""
-    # figure out which dependencies are still required by enabled modules
+    """uninstall dependencies for a module together with the packages they pulled in,
+    but only those that no enabled module and no base dependency still needs"""
+    # figure out which dependencies are still required by other enabled modules
     if exclude is None:
         exclude = set()
-        try:
-            import importlib
-            # gather deps from all enabled core & user modules
-            for mod_name in core.config.get("modules", "enabled", []):
-                deps = _extract_deps_from_file(_get_module_file_path(importlib.import_module("modules"), mod_name))
-                if deps:
-                    exclude.update(deps)
-            for mod_name in core.config.get("user_modules", "enabled", []):
-                deps = _extract_deps_from_file(_get_module_file_path(importlib.import_module("user_modules"), mod_name))
-                if deps:
-                    exclude.update(deps)
-            for mod_name in core.config.get("channels", "enabled", []):
-                deps = _extract_deps_from_file(_get_module_file_path(importlib.import_module("channels"), mod_name))
-                if deps:
-                    exclude.update(deps)
-            for mod_name in core.config.get("user_channels", "enabled", []):
-                deps = _extract_deps_from_file(_get_module_file_path(importlib.import_module("user_channels"), mod_name))
-                if deps:
-                    exclude.update(deps)
-        except Exception:
-            pass  # proceed without exclusion if config/package lookup fails
+        exclude.update(_deps_of_enabled("modules", "modules"))
+        exclude.update(_deps_of_enabled("user_modules", "user_modules"))
+        exclude.update(_deps_of_enabled("channels", "channels"))
+        exclude.update(_deps_of_enabled("user_channels", "user_channels"))
 
     file_path = _get_module_file_path(package, module_name)
     if not file_path:
@@ -263,72 +447,127 @@ async def uninstall_module_deps(package, module_name, manager, exclude=None):
     if not deps:
         return False
 
-    # Get list of missing dependencies
-    missing = _check_missing_deps(deps)
-    # Installed = Total - Missing
-    installed = [dep for dep in deps if dep not in missing]
+    # recursively walk to uninstall any transient dependencies (dependencies of dependencies)
+    # for dependencies that are marked for uninstall
+    installed = _installed_requirements()
+    keep = _requirement_closure(
+        {_dep_name(dep) for dep in exclude} | {_dep_name(dep) for dep in _get_base_dependencies()},
+        installed,
+    )
+    removable = _requirement_closure({_dep_name(dep) for dep in deps}, installed) - keep
 
-    # Filter out dependencies that are still required by enabled modules
-    installed = [dep for dep in installed if dep not in exclude]
-
-    # filter out dependencies from requirements.txt (dependencies that openlumara ALWAYS needs)
-    requirementstxt = core.get_path("requirements.txt")
-    if os.path.exists(requirementstxt):
-        with open(requirementstxt, 'r', encoding="utf-8") as f:
-            base_deps = [dep.strip() for dep in f.read().split("\n") if dep.strip()]
-
-    installed = [dep for dep in installed if dep not in base_deps]
-
-    if installed:
-        # re-import so we can find the uninstall hook
-        import importlib
+    if removable:
         try:
-            mod = importlib.import_module(f"{package.__name__}.{module_name}")
+            # import via the folder loader so we can find the uninstall hook
+            mod = import_entry(package, module_name)
         except Exception:
             # If the module can't be imported (e.g., missing dependencies), skip the uninstall hook
             mod = None
 
         if mod:
-            # find the class
+            # find the module/channel class defined in this folder
             module_class = None
-            is_channel = False
-            is_module = False
             for attr in dir(mod):
                 obj = getattr(mod, attr)
                 if not inspect.isclass(obj):
-                    # if it's somehow not a class.. SKIP
                     continue
 
                 if issubclass(obj, core.module.Module):
-                    is_module = True
+                    is_channel = False
                 elif issubclass(obj, core.channel.Channel):
                     is_channel = True
                 else:
                     continue
 
-                if (isinstance(obj, type) and obj is not core.module.Module):
-                    module_class = obj
-                    break
+                # only classes defined within this module folder count
+                origin = getattr(obj, "__module__", "")
+                if origin != mod.__name__ and not origin.startswith(f"{mod.__name__}."):
+                    continue
+
+                module_class = obj
+                break
 
             if module_class:
                 # create a temporary instance
-                is_user = package.__name__ == 'user_modules'
-                if is_module:
-                    instance = module_class(manager, is_user_module=is_user)
-                elif is_channel:
+                if is_channel:
                     instance = module_class(manager)
+                else:
+                    is_user = package.__name__ == 'user_modules'
+                    instance = module_class(manager, is_user_module=is_user)
 
                 # run the uninstall hook
                 if hasattr(instance, 'on_uninstall'):
                     await instance.on_uninstall()
 
-        _uninstall_deps(module_name, installed, manager)
+        await asyncio.to_thread(_uninstall_deps, module_name, sorted(removable), manager)
         return True
 
 
 # --------------------------
 # module loading
 # --------------------------
+def _module_has_folder(package, module_name, folder_name):
+    """checks whether a module folder contains a subfolder with the given name"""
+    if not folder_name:
+        return False
+
+    module_file = _get_module_file_path(package, module_name)
+    if module_file:
+        return os.path.isdir(os.path.join(os.path.dirname(module_file), folder_name))
+
+    for sub_path in getattr(package, "__path__", []):
+        if os.path.isdir(os.path.join(sub_path, module_name, folder_name)):
+            return True
+    return False
+
+
+def _insert_setting(target_class, setting_name, setting_value, position="append"):
+    """inserts a setting into a module class's settings dict if it is missing.
+
+    position can be "append" or "top". Returns True when the setting was newly
+    inserted, otherwise False.
+    """
+    if not setting_name:
+        return False
+
+    settings = getattr(target_class, "settings", None)
+    if not isinstance(settings, dict):
+        settings = {}
+    else:
+        settings = dict(settings)
+
+    if setting_name in settings:
+        return False
+
+    if position == "top":
+        new_settings = {setting_name: setting_value}
+        new_settings.update(settings)
+    else:
+        settings[setting_name] = setting_value
+        new_settings = settings
+
+    target_class.settings = new_settings
+    return True
+
+
+def _ensure_webui_extension_setting(package, module_name, target_class):
+    """auto-adds the enable_webui_extension setting if a module ships webui assets"""
+    if package.__name__.split(".")[-1] not in ("modules", "user_modules"):
+        return
+    if not _module_has_folder(package, module_name, "webui"):
+        return
+
+    _insert_setting(
+        target_class,
+        "enable_webui_extension",
+        {
+            "default": True,
+            "description": "Whether to load this module's WebUI Extensions, which extend the WebUI with module-specific features, sidebars, panels, etc"
+        },
+        position="top"
+    )
+
+
 def load(package, base_class = None, filter: list = None, reload: bool = False, loading_config=False):
     """
     loops through the specified package imported with `import whatever`, then checks inside those packages for any classes that derive from base_class, and return a tuple of those classes so we can use them as modules, channels etc
@@ -337,15 +576,12 @@ def load(package, base_class = None, filter: list = None, reload: bool = False, 
     import my_folder_with_classes as dynamic_folder
     self.load_modules(dynamic_folder, core.module.Module)
     """
-    import importlib
-    import pkgutil
-
     discovered = []
 
     if not hasattr(package, '__path__'):
         return ()
 
-    for importer, modname, ispkg in pkgutil.iter_modules(package.__path__):
+    for modname in discover_module_names(package):
         if filter is not None and modname not in filter:
             # dont even import unloaded modules
             continue
@@ -370,14 +606,8 @@ def load(package, base_class = None, filter: list = None, reload: bool = False, 
                         continue
 
         try:
-            # Import the module relative to the package
-            module = importlib.import_module(f"{package.__name__}.{modname}")
-
-            # if the reload flag is true, force a reload of the module code so that new changes are applied
-            # NOTE: this is only intended to be used upon a total restart of openlumara.
-            # it can mess things up severely if modules/channels are still loaded
-            if reload:
-                importlib.reload(module)
+            # Import the module folder via its entry file (real package -> relative imports work)
+            module = import_entry(package, modname, reload=reload)
 
             for attr_name in dir(module):
                 target_class = getattr(module, attr_name)
@@ -393,15 +623,18 @@ def load(package, base_class = None, filter: list = None, reload: bool = False, 
                     if not issubclass(target_class, base_class):
                         continue
 
-                # skip modules not in filter if filter is enabled
-                if filter and core.modules.get_name(target_class) not in filter:
+                # only discover classes defined in this module folder itself (not imported ones, e.g. modules.http.Http)
+                origin = getattr(target_class, "__module__", "")
+                if origin != module.__name__ and not origin.startswith(f"{module.__name__}."):
                     continue
+
+                _ensure_webui_extension_setting(package, modname, target_class)
 
                 discovered.append(target_class)
         except core.exceptions.DependencyMissing as e:
             # silence these warnings for now
             # need a better way to deal with missing dependencies
-            pass
+            continue
         except Exception as e:
             # Catching Exception prevents the program from crashing on faulty modules.
             # We simply log the warning and continue to the next module.
@@ -417,15 +650,12 @@ def load(package, base_class = None, filter: list = None, reload: bool = False, 
     return tuple(discovered)
 
 def get_name(obj):
-    """converts a name like LifeOrganizer to `life_organizer`"""
+    """returns the canonical module/channel name, derived from the folder the class lives in
+    (e.g. modules.calendar.module -> 'calendar'). The class name no longer matters.
+    Classes defined outside a module/channel folder are not supported."""
+    module_name = getattr(obj, "__module__", "")
+    parts = module_name.split(".")
+    if len(parts) >= 2 and parts[0] in ("modules", "user_modules", "channels", "user_channels"):
+        return parts[1]  # works for submodules too (channels.webui.api -> 'webui')
 
-    name = None
-    if inspect.isclass(obj):
-        name = obj.__name__
-    else:
-        name = obj.__class__.__name__
-
-    re_snakecase = re.compile('(?!^)([A-Z]+)')
-    name_snakecase = re.sub(re_snakecase, r'_\1', name).lower()
-
-    return name_snakecase
+    raise ValueError(f"{obj!r} is not defined inside a module/channel folder")

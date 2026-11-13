@@ -1,5 +1,6 @@
 import core
 import os
+import time
 
 class Messages:
     def __init__(self, channel, chat):
@@ -63,6 +64,9 @@ class Messages:
                 # this happens when the user uploads a media file. don't set that as a title, lol
                 pass
 
+        # add current time as a timestamp to the message, so that it can be displayed in channels
+        new_message["_metadata"]["timestamp"] = int(time.time())
+
         # if marked as a ghost message, set the flag. gets handled in self.trim()
         # ghost messages are invisible to the AI
         if ghost:
@@ -78,7 +82,7 @@ class Messages:
             for module_name, module in self.channel.manager.modules.items():
                 if hasattr(module, 'on_message_inject'):
                     try:
-                        injection = await module.on_message_inject()
+                        injection = await module.on_message_inject(new_message.get("content"))
                         if injection:
                             injections.append(injection)
                     except Exception as e:
@@ -86,6 +90,11 @@ class Messages:
 
             if injections:
                 new_message["_metadata"]["injection"] = "\n\n".join(injections)
+
+        # this is the point where it's safe to auto-compact
+        if message.get("role") == "user" and not cmd:
+            if await self.channel.context.is_over_threshold():
+                await self.channel.context.compress()
 
         self.data.append(new_message)
 

@@ -1,23 +1,26 @@
-#!/bin/bash
+#!/bin/sh
+# install.sh symlinks this script into ~/.local/bin as `openlumara`, so follow
+# the link back to the repository before touching any relative path
+target="$0"
+while [ -L "$target" ]; do
+    link=$(readlink "$target")
+    case "$link" in
+        /*) target="$link" ;;
+        *)  target="$(dirname "$target")/$link" ;;
+    esac
+done
+cd "$(dirname "$target")" || exit 1
 
-# detect Python binary
-if command -v python3 >/dev/null 2>&1; then
-    PYTHON_BIN="python3"
-elif command -v python >/dev/null 2>&1; then
-    PYTHON_BIN="python"
-else
-    echo "error: no python binary found (checked python3 and python)"
-    exit 1
+# shared helpers for venv management
+. tools/venv.sh
+
+# uv manages the environment when available, plain venv + pip otherwise
+if have_uv; then
+    # build the environment on first run only: syncing on every start puts
+    # back the dependencies the app uninstalls for disabled modules
+    [ -x .venv/bin/python ] || uv_sync || exit 1
+    exec uv run --frozen --no-sync main.py "$@"
 fi
 
-# set up virtual environment
-if [ ! -d "venv" ]; then
-    echo "setting up virtual environment with $PYTHON_BIN..."
-    $PYTHON_BIN -m venv venv
-    venv/bin/pip install --upgrade pip
-    venv/bin/pip install -r requirements.txt
-fi
-
-# aaand run!
-source venv/bin/activate
-python main.py "$@"
+ensure_venv || exit 1
+exec .venv/bin/python main.py "$@"

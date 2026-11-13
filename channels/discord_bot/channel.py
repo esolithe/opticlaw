@@ -1,0 +1,472 @@
+import core
+import discord
+import asyncio
+import time
+import datetime
+import json_repair
+
+CHUNK_SIZE = 1500
+
+# we have to create a special class here so that we can override methods and make methods like on_message work
+class DiscordClient(discord.Client):
+    def __init__(self, channel, **kwargs):
+        super().__init__(**kwargs)
+        self._chan = channel
+        self._message_history_tracker = []
+        self._last_user_msg = ""
+
+    async def on_ready(self):
+        # startup flow
+        self._chan.log(self._chan.name, "Logged in")
+
+        try:
+            self.target_channel = await self.fetch_channel(self._chan.config.get("target_channel_id"))
+        except Exception as e:
+            self._chan.log(self._chan.name, f"failed to retrieve target channel: {core.detail_error(e)}")
+
+        startup_message = self._chan.config.get("startup_message")
+        if startup_message:
+            await self.send_to_main(startup_message)
+
+    async def send_to_main(self, content: str, message=None):
+        if self._chan.config.get("use_replies") and message is not None:
+            return await message.reply(content)
+        else:
+            return await self.target_channel.send(content)
+
+    def _make_progress_bar(self, percentage, size=12):
+        filled = int(size * percentage / 100)
+        if filled <= 0:
+            bar = "░" * size
+        elif filled >= size:
+            bar = "█" * size
+        else:
+            bar = "█" * (filled - 1) + "▓" + "░" * (size - filled)
+        return f"`{bar}` {percentage:.0f}%"
+
+    async def on_message(self, message):
+        cmd_prefix = core.config.get("core", "cmd_prefix")
+
+        # dont reply to its own messages
+        if message.author == self.user:
+            return
+
+        # and dont spam channels that arent the target channel
+        if message.channel.id != int(self._chan.config.get("target_channel_id")):
+            return
+
+        # check if the bot was mentioned
+        if self._chan.config.get("require_mentions"):
+            mentioned = False
+            # go through normal mentions first
+            for member in message.mentions:
+                if member.id == self.user.id:
+                    mentioned = True
+
+            # then check for mention keywords
+            mention_keywords = self._chan.config.get("mention_keywords")
+            for keyword in mention_keywords:
+                if keyword.lower() in message.content.lower():
+                    mentioned = True
+
+        # clear the history tracker if mentioned
+        # so that the next message only contains chat history from that message onward
+        if mentioned:
+            self._message_history_tracker = []
+
+        # track messages said in chat that weren't mentions
+        msg_history_str = ""
+        if (
+            self._chan.config.get("require_mentions")
+            and
+            self._chan.config.get("track_chat_history")
+            and
+            not mentioned
+        ):
+            self._message_history_tracker.append(message)
+
+            for msg in self._message_history_tracker:
+                msg_history_str += f"{msg.author.name.strip(cmd_prefix)} said:\n{msg.content}\n\n"
+
+            # merge discord message history into the last user message or create a new one if it doesnt exist
+            last_msg = await self._chan.context.chat.messages.get(-1) or {}
+            if last_msg.get("role") != "user":
+                await self._chan.context.chat.messages.add({"role": "user", "content": msg_history_str})
+            else:
+                await self._chan.context.chat.messages.edit(-1, {"role": "user", "content": self._last_user_msg+"\n\n"+msg_history_str})
+
+        # if mentions are required, only reply if mentioned
+        if not mentioned:
+            return
+
+        # determine whether non-public commands may be ran by the user
+        authorized = (str(message.author.id).strip() in self._chan.config.get("authorized_user_ids"))
+
+        content = message.content
+
+        # remove bot mentions from message before sending
+        content = content.strip()
+        for mention in message.mentions:
+            if mention.id == self.user.id:
+                content = content.replace(mention.mention, "")
+        content = content.strip()
+
+        is_cmd = False
+        _, cmd, args = await self._chan.commands._extract_cmd(content)
+        if cmd:
+            is_cmd = content.lower().strip().startswith(cmd_prefix.lower())
+
+        files = {}
+
+        if is_cmd:
+            # send the pure command to the AI
+            # command authorization checks were moved to the core framework
+            # so that it's much more secure
+            pass
+        else:
+            # process attachments
+            for attachment in message.attachments:
+                files[attachment.filename] = await attachment.read()
+
+            orig_content = str(content)
+            content = ""
+
+            group_chat = self._chan.config.get("use_group_chat")
+
+            # check if the message is a reply
+            if message.reference:
+                # this gets the actual message object being replied to
+                replied_message = await message.channel.fetch_message(message.reference.message_id)
+
+                # format it like a reply
+                replied_content = replied_message.content or ""
+                replied_message_formatted = "> "+"\n> ".join(replied_content.split("\n"))
+                content += f"in reply to:\n{replied_message_formatted}\n\n"
+
+            # if group chat is enabled, make the AI aware of who is speaking
+            if group_chat:
+                # strip cmd prefix from author name for safety
+                # extra layer of security on top of the fix further below in the code
+                author_name = str(message.author.name).lstrip(cmd_prefix)
+                content += f"{author_name} said: {orig_content}"
+            else:
+                content += orig_content
+
+        # save the message for use in stuff like group chat history
+        self._last_user_msg = str(content)
+
+        if self._chan.config.get("use_streaming"):
+            await self.render_stream(
+                self._chan.send_stream(content, commands_authorized=authorized, files=files),
+                source_message=message
+            )
+        else:
+            async with self.target_channel.typing():
+                response_obj = await self._chan.send(content, commands_authorized=authorized, files=files)
+                response = response_obj.get("content")
+
+            if not response.strip():
+                return
+            if len(response) < CHUNK_SIZE:
+                await self.send_to_main(response, message=message)
+            else:
+                offset = 0
+                while offset < len(response):
+                    chunk = response[offset:(offset+CHUNK_SIZE)]
+                    await self.send_to_main(chunk, message=message)
+                    offset += CHUNK_SIZE
+
+    async def render_stream(self, stream, source_message=None):
+        """renders any stream object into discord using edit-based streaming.
+        source_message: the discord message that triggered the stream.
+        if None, this is a background stream pushed by the framework itself
+        (context compression, subagents, modules)"""
+        background = source_message is None
+        edit_interval = float(self._chan.config.get("edit_interval"))
+
+        async with self.target_channel.typing():
+            # send a message that can be edited
+            msg = await self.send_to_main(
+                "working on a background task.." if background else "processing your request..",
+                message=source_message
+            )
+
+            # stream through tokens so we can get the current state including prompt processing,
+            # but only actually stream content tokens to discord if it's set in config
+            response_content = ""
+            chunk_content = ""
+            reasoning_content_full = ""
+            reasoning_content = ""
+            accumulated_toolcalls = []
+
+            should_stream_text = self._chan.config.get("stream_text")
+
+            # we're using a timer to edit on an interval to avoid hitting rate limits
+            timer = time.time()
+            async for token in stream:
+                try:
+                    token_type = token.get("type")
+                    token_content = token.get("content")
+
+                    # accumulate toolcalls for display
+                    toolcalls_str = ""
+                    if accumulated_toolcalls:
+                        toolcalls_str = "\n".join(accumulated_toolcalls[-5:])+"\n\n"
+
+                    if token_type == "error":
+                        # don't leave a stuck placeholder behind when erroring out
+                        try:
+                            await msg.delete()
+                        except Exception:
+                            pass
+                        await self.send_to_main(f"✖ ERROR: {token_content}", message=source_message)
+                        return
+
+                    if token_type in ["user_message", "token_usage"]:
+                        continue
+
+                    if token_type == "prompt_progress":
+                        # show a fancy progress bar
+
+                        total = token_content.get("total")
+                        processed = token_content.get("processed")
+
+                        percentage = 0
+                        if total:
+                            percentage = (processed / total) * 100
+                        msg = await msg.edit(content=toolcalls_str+self._make_progress_bar(percentage))
+
+                        continue
+
+                    if not should_stream_text:
+                        # just accumulate
+                        if token_type == "reasoning":
+                            reasoning_content += token_content
+
+                            if msg.content != "thinking..":
+                                msg = await msg.edit(content="thinking..")
+                        if token_type == "content":
+                            if msg.content != "writing response..":
+                                msg = await msg.edit(content="writing response..")
+
+                            response_content += token_content
+
+                        continue
+
+                    # edit-streaming logic
+                    if token_type == "tool_calls":
+                        for tc in token.get("tool_calls"):
+                            accumulated_toolcalls.append(self._chan.tc_manager.display_call(tc))
+
+                    if token_type == "reasoning":
+                        reasoning_content_full += token_content
+
+                        # stream only part of the reasoning
+                        reasoning_snippet = "\n".join(
+                            # every line truncated to 100 chars max
+                            f"> {"..."+line[-244:].rstrip()+"..." if len(line) > 250 else line}"
+                            # last 5 lines of reasoning
+                            for line in "".join(reasoning_content_full).splitlines()[-5:]
+                        )
+
+                        reasoning_content = "## thinking..\n"+reasoning_snippet
+                    elif token_type == "content":
+                        if reasoning_content:
+                            # erase it from display
+                            reasoning_content = None
+
+                        chunk_content += token_content
+                        response_content += token_content
+
+                        # if response content length exceeds chunk size, start a new chunk message
+                        if len(chunk_content) >= CHUNK_SIZE:
+                            # finalize current message
+                            msg = await msg.edit(content=chunk_content)
+
+                            msg = await self.send_to_main("...")
+                            chunk_content = ""
+
+                    # this checks if the timer has elapsed
+                    if (time.time() - timer) >= edit_interval:
+                        if reasoning_content:
+                            if self._chan.config.get("show_reasoning"):
+                                msg = await msg.edit(content=toolcalls_str+reasoning_content)
+                            elif msg.content != toolcalls_str+"thinking..":
+                                msg = await msg.edit(content=toolcalls_str+"thinking..")
+                        elif chunk_content.strip():
+                            msg = await msg.edit(content=chunk_content)
+
+                        timer = time.time()
+                except Exception as e:
+                    self._chan.log(self._chan.name, f"error: {core.detail_error(e)}")
+                    await self.send_to_main(f"✖ ERROR: {core.detail_error(e)}")
+
+            if background:
+                if should_stream_text and chunk_content.strip():
+                    await msg.edit(content=chunk_content)
+                else:
+                    # discord won't let us edit a message to be empty, so remove the placeholder instead
+                    await msg.delete()
+
+            elif should_stream_text:
+                # do a final edit at the end
+                if chunk_content.strip():
+                    msg = await msg.edit(content=chunk_content)
+                else:
+                    await msg.delete()
+            else:
+                # apply the same logic as non-streaming mode
+                if not response_content.strip():
+                    await msg.delete()
+                elif len(response_content) < CHUNK_SIZE:
+                    msg = await msg.edit(content=response_content)
+                else:
+                    offset = 0
+                    while offset < len(response_content):
+                        chunk = response_content[offset:(offset+CHUNK_SIZE)]
+                        if offset == 0:
+                            msg = await msg.edit(content=chunk)
+                        else:
+                            await self.send_to_main(chunk, message=source_message)
+
+                        offset += CHUNK_SIZE
+
+
+# the openlumara channel that sends to/from the actual discord client
+class DiscordBot(core.channel.Channel):
+    """Talk to your AI over Discord"""
+
+    dependencies = ["discord.py"]
+
+    settings =  {
+        "token": {
+            "description": "Your discord token. Get it in the [Discord Developer Portal](https://discord.com/developers/applications)",
+            "default": None
+        },
+        "authorized_user_ids": {
+            "type": "list",
+            "description": "the IDs of the users that may administrate the bot. Get it by enabling *Developer Mode* in Discord (open Settings, then go to Developer, then toggle on Developer Mode), then right clicking your name and clicking/tapping *Copy ID*",
+            "default": []
+        },
+        "target_channel_id": {
+            "description": "The channel to target for communication with your discord bot. Get this by right clicking your channel and clicking/tapping *Copy ID*",
+            "default": None
+        },
+        "require_mentions": {
+            "description": "Whether to require people to mention the bot or reply to one of its messages in order to trigger a response",
+            "default": True
+        },
+        "mention_keywords": {
+            "description": "An optional list of keywords that, when present in a user's message, should trigger the discord bot to respond to the message. As an alternative to @mentions. For example, \"hey lumara\"",
+            "default": [],
+            "type": "list",
+            "depends": "require_mentions"
+        },
+        "show_reasoning": {
+            "description": "Whether to show the model's internal reasoning process within sent messages",
+            "default": False
+        },
+        "use_streaming": {
+            "description": "Whether to use token streaming to do things like display a thinking indicator, show prompt processing progress, and so on.. turn this off if you want the bot to strictly only send messages without ever editing them. Note that this does NOT enable text generation streaming",
+            "default": True
+        },
+        "stream_text": {
+            "description": "Whether to stream text live as it is generated. If this is off, it will instead accumulate the content until it is ready, then post the finished content",
+            "default": False
+        },
+        "edit_interval": {
+            "description": "The rate (in seconds) at which your bot's messages will be edited in streaming mode. Recommend setting this to 1 or above to avoid being rate limited!",
+            "default": 1,
+            "depends": "use_streaming"
+        },
+        "stream_tool_calls": {
+            "description": "Whether to stream tool call arguments as they are written by the AI. Extremely useful when using toolcalls with long content, such as when using the Coder to write code",
+            "default": False,
+            "depends": "use_streaming"
+        },
+        "use_replies": {
+            "description": "Whether the bot should reply to your messages using discord's reply feature",
+            "default": False
+        },
+        "use_group_chat": {
+            "description": "Will make the bot aware of who is talking to it by injecting the name of the person into messages sent to the AI",
+            "default": True
+        },
+        "track_chat_history": {
+            "description": "Whether to let the discord bot see messages sent by others in channels without having to pin it. This just makes the bot aware of the messages, it does not respond to them unless you ping.",
+            "default": False,
+            "depends": {"require_mentions": True, "use_group_chat": True}
+        },
+        "startup_message": {
+            "description": "The message your bot will send when it's started up. Leave this blank to disable",
+            "default": None
+        },
+        "shutdown_message": {
+            "description": "The message your bot will send when it shuts down. Leave this blank to disable",
+            "default": None
+        }
+    }
+
+    async def on_system_prompt(self):
+        return "You are talking to the user through the Discord chat network."
+
+    async def run(self):
+        # set up discord intents (ugh)
+        intents = discord.Intents.default()
+        intents.message_content = True
+
+        self.bot = DiscordClient(self, intents=intents)
+
+        try:
+            await self.bot.start(self.config.get("token"))
+        except discord.LoginFailure:
+            self.log(self.name, "Discord login failed: the token in this channel's settings is missing or invalid")
+        except discord.DiscordException as e:
+            self.log(self.name, f"Discord client stopped: {core.detail_error(e)}")
+        except Exception as e:
+            self.log(self.name, f"Discord client stopped: {core.detail_error(e)}")
+        finally:
+            try:
+                await self.bot.close()
+            except Exception:
+                pass
+
+    async def on_shutdown(self):
+        shutdown_msg = self.config.get("shutdown_message")
+        if not shutdown_msg:
+            return
+
+        # the bot may never have logged in (bad token, network issues),
+        # in which case there is no connection to say goodbye over
+        if not self.bot.is_closed():
+            try:
+                await self.bot.send_to_main(shutdown_msg)
+            except Exception:
+                pass
+
+    async def on_push(self, message: dict):
+        content = message.get("content")
+
+        if len(content) < CHUNK_SIZE:
+            await self.bot.send_to_main(content)
+        else:
+            offset = 0
+            while offset < len(content):
+                chunk = content[offset:(offset+CHUNK_SIZE)]
+                await self.bot.send_to_main(chunk)
+                offset += CHUNK_SIZE
+
+    async def on_stream(self, stream):
+        bot = self.bot
+
+        can_render = self.config.get("use_streaming")
+        can_render = can_render and bot is not None and not bot.is_closed()
+        can_render = can_render and getattr(bot, "target_channel", None) is not None
+
+        # if we can't render, the stream must STILL be consumed!
+        if not can_render:
+            async for _ in stream:
+                pass
+            return
+
+        await bot.render_stream(stream)

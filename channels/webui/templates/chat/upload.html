@@ -1,10 +1,5 @@
-<div
-    x-show="$store.upload.files.length > 0"
-    id="upload-queue-container"
-    class="upload-queue"
->
-    <!-- Pending files -->
-    <template x-if="$store.upload.files.length > 0">
+<template x-if="$store.upload.files.length > 0">
+    <div id="upload-queue-container" class="upload-queue">
         <div class="upload-section">
             <template x-for="(file, index) in $store.upload.files" :key="'pending-' + index">
                 <div class="item">
@@ -23,5 +18,5 @@
                 </div>
             </template>
         </div>
-    </template>
-</div>
+    </div>
+</template>

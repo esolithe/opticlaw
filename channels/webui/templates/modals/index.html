@@ -1,5 +1,26 @@
 {# this file just auto includes all modals #}
 
+<template x-if="$store.ui.currentModal">
+    <div class="modal-overlay" @click="$store.ui.closeModal()"></div>
+</template>
+
+{# admin lockdown: don't even ship the settings modal markup #}
+{% if config.get("enable_admin_settings") %}
 {% include 'modals/settings/index.html' %}
+{% endif %}
 {% include 'modals/system/state.html' %}
 {% include 'modals/global_search.html' %}
+{% include 'modals/categories.html' %}
+{% include 'modals/move_chat.html' %}
+
+{# 
+   add any modals defined by modules (webui extensions)
+   every .html under <module>/webui/templates/modals/ is included
+       
+   the owning module's settings are exposed to the included template as
+   `module_config` (a loop-scoped set is visible to includes)
+#}
+{% for modal in extension_modals() %}
+{% set module_config = modal.config %}
+{% include modal.template %}
+{% endfor %}

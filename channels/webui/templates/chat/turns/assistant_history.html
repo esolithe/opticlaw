@@ -1,4 +1,4 @@
-<div class="flex fullwidth">
+<div class="flex fullwidth segment">
     <!-- Reasoning block -->
     <template x-if="Object.hasOwn(message, 'reasoning_content') || message.type === 'reasoning'">
         {% include 'chat/reasoning.html' %}
@@ -9,7 +9,7 @@
         <div>
             <template x-if="$store.chat.editingMessageIndex !== turn.last_message_index">
                 <div>
-                    <div class="content" x-html="message._metadata?.is_cmd ? escapeHtml(message.content) : renderMarkdown(message.content)" :class="{'command': message._metadata?.is_cmd}"></div>
+                    <div class="content" x-md="{ message: message, live: false, raw: message._metadata?.is_cmd }" :class="{'command': message._metadata?.is_cmd}"></div>
                 </div>
             </template>
             <template x-if="$store.chat.editingMessageIndex === turn.last_message_index">
@@ -28,4 +28,7 @@
     <template x-if="Object.hasOwn(message, 'tool_calls') || message.type === 'tool_calls'">
         {% include 'chat/toolcalls.html' %}
     </template>
+
+    <!-- extension injection point: modules can annotate assistant messages via macro in <module>/chat/turns/assistant_history.html -->
+    {{ extension_slot("below_message") }}
 </div>

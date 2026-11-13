@@ -53,6 +53,7 @@ AUDIO_STORE = {
     setSoundEnabled(id, enabled) {
         this.sounds[`${id}SoundEnabled`] = enabled;
         localStorage.setItem(`${id}SoundEnabled`, String(enabled));
+        AudioManager.refreshSettings();
     },
 
     setSoundData(id, dataUrl, name) {

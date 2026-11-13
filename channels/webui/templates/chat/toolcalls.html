@@ -1,65 +1,70 @@
-<div class="flex fullwidth">
-    <template x-for="tool in message.tool_calls">
+<!-- -- AI GENERATED CODE (Qwen3.8-Flash-Next) :: (2026-09-16) status:reviewed -->
+<div class="flex fullwidth nogaps">
+    {% set scope = 'step' if toolcard_in_step else 'message' %}
+    <template x-for="(tool, toolIdx) in {{ scope }}.tool_calls">
         <div>
-            <div class="tool-calls-container" x-data="{ collapsed: false }">
-                <div class="tool-call-card">
+            <div class="tool-calls-container"
+                 x-data="{ collapsed: {% if toolcard_in_step %}($store.stream.state === 'idle' ? toolIdx > 0 : !!(tool._metadata?.response)){% else %}$store.stream.state === 'idle' || !!(tool._metadata?.response){% endif %}, autoCollapsed: !!(tool._metadata?.response), cacheKey: tool.id ?? ({{ scope }}.tool_call_id + ':' + toolIdx) }"
+                 x-effect="if (tool._metadata?.response && !autoCollapsed) { autoCollapsed = true; collapsed = true }"
+            >
+            <div class="tool-call-card" :class="{ 'tool-pending': !tool._metadata?.response, 'tool-error': tool._metadata?.failed }">
+                    <div class="node-dot" :class="{expanded: !collapsed}" @click.stop="collapsed = !collapsed">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 6 15 12 9 18"></polyline></svg>
+                    </div>
                     <div class="header" @click="collapsed = !collapsed">
-                        <svg :class="{'toggle': true, 'toggle-expanded': !collapsed}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="9 18 15 12 9 6"></polyline>
-                        </svg>
+                        <svg class="card-chevron" :class="{'expanded': !collapsed}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 6 15 12 9 18"></polyline></svg>
                         {% include 'svg/wrench.svg' %}
-                        <span class="name" x-text="tool.function?.name || 'unknown'"></span>
-                        <template x-if="tool.response">
-                            <span class="status completed" x-init="collapsed = true">done</span>
-                        </template>
-                        <template x-if="!tool.response">
-                            <span class="status pending">calling...</span>
-                        </template>
+                        <span class="name" x-show="toolDisplayName(tool)">
+                          <span class="module" x-fade-text="toolDisplayName(tool).split('_')[0].replace(/^\w/, c => c.toUpperCase())+': '"></span>
+                          <span x-fade-text="toolDisplayName(tool).split('_').slice(1).join(' ')"></span>
+                        </span>
+                        <span class="name" x-show="!toolDisplayName(tool)">unknown</span>
+                        <span class="call-args" x-show="tool._metadata?.summary"
+                              x-text="tool._metadata?.summary ?? ''"></span>
+                        <span class="call-result" x-show="tool._metadata?.response"
+                              x-text="toolCallResultSummary(tool, tool.id ?? {{ scope }}?.tool_call_id)"></span>
                     </div>
 
-                    <div class="body" x-show="!collapsed">
-                        <div class="section">
-                            <div class="args">
-                                <div class="title">Arguments</div>
-                                <template x-for="(value, key) in partialJsonParse(tool.function?.arguments ?? '{}')">
-                                    <div class="arg-row">
-                                        <span class="arg-name" x-text="key"></span>
-                                        <span class="arg-value" x-text="value"></span>
-                                    </div>
-                                </template>
+                    <div x-show="!collapsed" x-collapse.duration.250>
+                    <div class="body" x-data="{ cacheKey: tool.id ?? ({{ scope }}.tool_call_id + ':' + toolIdx) }">
+                        {% include 'chat/tool_displays.html' %}
+                        <template x-if="toolDisplayView(tool)" x-data="{ get err() { return toolDisplayError(tool) } }">
+                            <div class="display-error" x-show="err" x-text="err"></div>
+                        </template>
+                        <template x-if="!toolDisplayView(tool)">
+                        <div class="default-display">
+                            <template x-for="(value, key) in tool._metadata?.args_parsed ?? {}">
+                                <div class="arg-row">
+                                    <span class="arg-name" x-fade-text="key"></span>
+                                    <span class="arg-value" x-box x-auto-scroll x-fade-text="(value !== null && typeof value === 'object') ? JSON.stringify(value, null, 2) : value"></span>
+                                </div>
+                            </template>
 
-                                <template x-if="tool.response">
-                                    <div class="tool-response-section">
-                                        <div class="title">Response</div>
-                                        <div class="content">
-                                             <div x-data="{
-                                                     get isJson() {
-                                                        try {
-                                                            JSON.parse(this.tool.response);
-                                                            return true;
-                                                        } catch {
-                                                            return false;
-                                                        }
-                                                    }
-                                                }">
-                                                 <!-- if it's json, use our complex function to show the response in a fancy way -->
-                                                <template x-if="isJson">
-                                                    <div class="content" x-html="toolResultsRenderer(JSON.parse(tool.response), 0)"></div>
-                                                </template>
-                                                <!-- if not, show it as a raw string, formatted nicely -->
-                                                <template x-if="!isJson">
-                                                    <p x-text="tool.response" class="raw-response"></p>
-                                                </template>
-                                            </div>
-                                        </div>
-                                    </div>
+                            <template x-if="tool._metadata?.response">
+                                <div class="response-row" x-data="{
+                                         get parsed() {
+                                            try {
+                                                const p = JSON.parse(this.tool._metadata?.response);
+                                                return (p !== null && typeof p === 'object') ? p : null;
+                                            } catch {
+                                                return null;
+                                            }
+                                         }
+                                     }">
+                                <template x-if="parsed !== null">
+                                    <div class="content" x-html="toolResponseRenderer(parsed)"></div>
                                 </template>
-                            </div>
+                                <template x-if="parsed === null">
+                                    <p x-fade-text="tool._metadata?.response" class="raw-response"></p>
+                                </template>
+                                </div>
+                            </template>
                         </div>
+                        </template>
+                    </div>
                     </div>
                 </div>
             </div>
         </div>
     </template>
-
 </div>

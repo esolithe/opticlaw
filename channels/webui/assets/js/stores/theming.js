@@ -3,6 +3,7 @@ THEME_STORE = {
     mode: localStorage.getItem('themeMode') || 'dark',
     themeCache: {},  // Cache for loaded theme data
     themeList: [],   // List of available theme families
+    themeCssStatus: {},
 
     init() {
         // Load theme list (just names and modes) - async, doesn't block
@@ -86,6 +87,12 @@ THEME_STORE = {
         const messageWidth = localStorage.getItem('messageMaxWidth') || 70;
         root.style.setProperty('--message-max-width', `${messageWidth}%`);
 
+        // streamed-token fade duration
+        const fadeEnabled = localStorage.getItem('tokenFadeEnabled') !== 'false';
+        const fadeMs = parseInt(localStorage.getItem('tokenFadeMs'), 10);
+        root.style.setProperty('--token-fade-duration',
+            `${fadeEnabled && !Number.isNaN(fadeMs) ? fadeMs : TOKEN_FADE_DEFAULT_MS}ms`);
+
         // Apply theme vars on top of base
         if (finalTheme) {
             for (const [varName, value] of Object.entries(finalTheme)) {
@@ -101,6 +108,9 @@ THEME_STORE = {
                 : '/assets/css/code-themes/github-light.css';
         }
 
+        // apply this theme's sidecar css (themes/<family>.css), if it exists
+        this.applyThemeCss(family);
+
         // Update state
         this.family = family;
         this.mode = effectiveMode;
@@ -110,9 +120,40 @@ THEME_STORE = {
         localStorage.setItem('themeMode', effectiveMode);
 
         // Dispatch event for other components to react
-        document.dispatchEvent(new CustomEvent('theme-changed', {
+        window.dispatchEvent(new CustomEvent('theme-changed', {
             detail: { family, mode: effectiveMode }
         }));
+    },
+
+    // Apply a theme's sidecar CSS
+    applyThemeCss(family) {
+        const existing = document.getElementById('theme-css');
+
+        // known to have no sidecar css: just make sure nothing is left over
+        if (this.themeCssStatus[family] === false) {
+            if (existing) existing.remove();
+            return;
+        }
+
+        if (existing && existing.dataset.themeFamily === family) {
+            return; // already applied (e.g. dark/light toggle)
+        }
+        if (existing) {
+            existing.remove();
+        }
+
+        const link = document.createElement('link');
+        link.id = 'theme-css';
+        link.rel = 'stylesheet';
+        link.dataset.themeFamily = family;
+        link.onload = () => { this.themeCssStatus[family] = true; };
+        link.onerror = () => {
+            // no sidecar css for this theme: remove tag, don't retry
+            this.themeCssStatus[family] = false;
+            link.remove();
+        };
+        link.href = `/themes/${encodeURIComponent(family)}.css`;
+        document.head.appendChild(link);
     },
 
     // Toggle mode (dark/light)
@@ -128,7 +169,6 @@ THEME_STORE = {
         if (font && font !== 'default') {
             this.loadGoogleFont(font);
             root.style.setProperty('--font-primary', `'${font}', sans-serif`);
-            root.style.setProperty('--code-font', `'${font}', monospace`);
         } else {
             root.style.setProperty('--font-primary', "Arial, sans-serif");
         }

@@ -7,6 +7,10 @@
     padding: 0;
 }
 
+:root {
+    --code-font: ui-monospace, 'Cascadia Code', 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+}
+
 /* Utility classes */
 .nopadding {
     padding: 0 !important;
@@ -37,6 +41,9 @@ div  {
     }
     &.fullwidth {
         width: 100%;
+    }
+    &.nogaps {
+        gap: 0;
     }
 }
 

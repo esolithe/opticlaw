@@ -3,8 +3,35 @@ import os
 import json
 import yaml
 import msgpack
+import regex as re
 
 TEMPORARY = False
+
+def _storage_open(path: str = None, mode: str = "r", base: str = None, rel: str = None, file_mode: int = None):
+    """open() replacement that fixes TOCTOU using core.sandbox_open"""
+    # -- AI GENERATED CODE (Qwen3.8 Flash Next) :: (2026-10-22) harness:openlumara status:reviewed
+
+    if base is None or rel is None:
+        base = os.path.dirname(path)
+        rel = os.path.basename(path)
+
+    if "w" in mode or "x" in mode:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    else:
+        flags = os.O_RDONLY
+
+    fd = core.sandbox_open(base, rel, flags)
+    # os.fchmod does not exist on Windows - skip the chmod there
+    if file_mode is not None and ("w" in mode or "x" in mode) and hasattr(os, "fchmod"):
+        try:
+            # chmod it to the filemode specified
+            os.fchmod(fd, file_mode)
+        except OSError:
+            pass
+    fdopen_mode = mode.replace("x", "w")
+    if "b" in mode:
+        return os.fdopen(fd, fdopen_mode)
+    return os.fdopen(fd, fdopen_mode, encoding="utf-8")
 
 class StorageList(list):
     """subclassed list that handles storage of data. supports a variety of storage formats."""
@@ -60,9 +87,8 @@ class StorageList(list):
     def _write(self, content):
         try:
             write_mode = "wb" if self.binary else "w"
-            encoding = "utf-8" if not self.binary else None
 
-            with open(self.path, write_mode, encoding=encoding) as f:
+            with _storage_open(self.path, write_mode) as f:
                 f.write(content)
         except Exception as e:
             core.log("error", f"error writing {self.name}: {e}")
@@ -73,8 +99,7 @@ class StorageList(list):
         try:
             result = None
             read_mode = "rb" if self.binary else "r"
-            encoding = "utf-8" if not self.binary else None
-            with open(self.path, read_mode, encoding=encoding) as f:
+            with _storage_open(self.path, read_mode) as f:
                 result = f.read()
             return result
         except Exception as e:
@@ -152,10 +177,15 @@ class StorageList(list):
 
         return super().__getitem__(args[0])
 
+    async def search(self, query, field_weights=None, top_n=10):
+        """ranked text search over this list's contents. returns ranked results (or an error string) from core.search"""
+        return await core.search.search(self, query, field_weights=field_weights, top_n=top_n)
+
 class StorageDict(dict):
     """subclassed dict that handles storage of data. supports a variety of storage formats."""
-    def __init__(self, name: str, type: str, manager=None, path=None, autoload=True, override_temporary=False, *args):
+    def __init__(self, name: str, type: str, manager=None, path=None, autoload=True, override_temporary=False, file_mode: int = None, *args):
         super().__init__(*args)
+        self.file_mode = file_mode
 
         # default to openlumara data folder if no path specified
         if not path:
@@ -195,11 +225,14 @@ class StorageDict(dict):
             case "msgpack":
                 file_ext = "mp"
                 self.binary = True
+            case "json_folder":
+                # json_folder stores each dict key as its own bare-json file inside a folder.
+                file_ext = "json"
 
         self.type = file_type
         self.ext = file_ext
 
-        if file_type not in ["markdown"]:
+        if file_type not in ["markdown", "json_folder"]:
             self.path += f".{self.ext}"
 
         if manager:
@@ -214,8 +247,7 @@ class StorageDict(dict):
     def _write(self, content):
         try:
             write_mode = "wb" if self.binary else "w"
-            encoding = "utf-8" if not self.binary else None
-            with open(self.path, write_mode, encoding=encoding) as f:
+            with _storage_open(self.path, write_mode, file_mode=self.file_mode) as f:
                 f.write(content)
         except Exception as e:
             core.log("error", f"error writing {self.name}: {e}")
@@ -227,28 +259,46 @@ class StorageDict(dict):
         try:
             result = None
             read_mode = "rb" if self.binary else "r"
-            encoding = "utf-8" if not self.binary else None
-            with open(self.path, read_mode, encoding=encoding) as f:
+            with _storage_open(self.path, read_mode) as f:
                 result = f.read()
             return result
         except Exception as e:
             core.log("error", f"error reading {self.name}: {e}")
             return False
 
+    def _folder_filename(self, key):
+        # turns a dict key into a safe filename
+        safe = re.sub(r"[^\w. -]", "_", str(key))[:80]
+        return safe + ".json"
+
+    def _disk_mtime(self):
+        # newest modifiedtime across the folder's files files.
+        if self.type == "json_folder":
+            latest = 0.0
+            try:
+                for filename in os.listdir(self.path):
+                    if filename.endswith(".json"):
+                        latest = max(latest, os.path.getmtime(os.path.join(self.path, filename)))
+            except OSError:
+                return None
+            return latest
+        try:
+            return os.path.getmtime(self.path)
+        except OSError:
+            return None
+
     def _file_changed(self):
         """check if the file on disk has changed"""
-        try:
-            current_mtime = os.path.getmtime(self.path)
-            return current_mtime != self._last_modified
-        except OSError:
+        current_mtime = self._disk_mtime()
+        if current_mtime is None:
             return True
+        return current_mtime != self._last_modified
 
     def _update_mtime(self):
         """update the cached modification time"""
-        try:
-            self._last_modified = os.path.getmtime(self.path)
-        except OSError:
-            pass
+        current_mtime = self._disk_mtime()
+        if current_mtime is not None:
+            self._last_modified = current_mtime
 
     def _parse_nested_keys(self, flat_dict):
         """Convert flat keys like 'ideas/openlumara/topic' into nested dict structure."""
@@ -332,7 +382,7 @@ class StorageDict(dict):
                     if not os.path.exists(file_dir):
                         os.makedirs(file_dir, exist_ok=True)
 
-                    with open(name, "w", encoding="utf-8") as f:
+                    with _storage_open(base=self.path, rel=f"{key}.md", mode="w") as f:
                         f.write(content)
 
                 # Raise an error if any keys were skipped due to validation failure
@@ -365,6 +415,22 @@ class StorageDict(dict):
             case "text":
                 if len(self) > 0:
                     self._write("\n".join(dict(self)))
+            # each key becomes a json file
+            case "json_folder":
+                if not os.path.exists(self.path):
+                    os.makedirs(self.path, exist_ok=True)
+
+                written = set()
+                for key, value in dict(self).items():
+                    filename = self._folder_filename(key)
+                    written.add(filename)
+                    with _storage_open(base=self.path, rel=filename, mode="w") as f:
+                        json.dump(value, f, indent=2)
+
+                # remove files whose keys no longer exist
+                for filename in os.listdir(self.path):
+                    if filename.endswith(".json") and filename not in written:
+                        os.remove(os.path.join(self.path, filename))
 
         # update mtime after saving so we know our cache is fresh
         self._update_mtime()
@@ -377,11 +443,32 @@ class StorageDict(dict):
             return True
 
         # skip reload if file hasn't changed on disk
-        if self.type not in ["markdown"] and not self._file_changed():
+        if self.type not in ["markdown", "json_folder"] and not self._file_changed():
             self._update_mtime()
             return True
 
         self.clear()
+
+        if self.type == "json_folder":
+            # load every json file in the folder.
+            # key is filename minus extension.
+            loaded = {}
+            try:
+                for filename in sorted(os.listdir(self.path)):
+                    if not filename.endswith(".json"):
+                        continue
+                    try:
+                            with _storage_open(base=self.path, rel=filename, mode="r") as f:
+                                value = json.load(f)
+                    except Exception as e:
+                        core.log("error", f"error reading {self.name}/{filename}: {e}")
+                        continue
+                    loaded[filename[:-5]] = value
+            except OSError:
+                pass
+            self.update(loaded)
+            self._update_mtime()
+            return True
 
         if self.type not in ["markdown"]:
             data = self._read()
@@ -409,7 +496,7 @@ class StorageDict(dict):
                             normalized_path = os.path.normpath(path_without_ext)
                             key = "/".join(normalized_path.split(os.sep))
 
-                            with open(full_path, "r", encoding="utf-8") as f:
+                            with _storage_open(base=self.path, rel=rel_path, mode="r") as f:
                                 flat_dict[key] = str(f.read())
 
                 # convert flat path keys to nested dict structure
@@ -429,6 +516,22 @@ class StorageDict(dict):
             self.load()
 
         return super().get(*args)
+
+    async def search(self, query, top_n=10):
+        """ranked text search over this dict's keys and (recursively flattened) values. returns ranked (key, score) tuples, or an error string"""
+        entries = [{"key": k, "value": _flatten_text(v)} for k, v in self.items()]
+        results = await core.search.search(entries, query, field_weights={"key": 1.0, "value": 1.0}, top_n=top_n)
+        return [(r["entry"]["key"], r["score"]) for r in results]
+
+def _flatten_text(value):
+    # recursively joins all strings inside nested dicts/lists so nested storages (like notes) stay searchable.
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return " \n ".join(_flatten_text(v) for v in value.values())
+    if isinstance(value, list):
+        return " ".join(_flatten_text(i) for i in value)
+    return ""
 
 class StorageText:
     """simple class that saves its content to a text file"""
@@ -473,7 +576,7 @@ class StorageText:
             return self
 
         try:
-            with open(self.path, "r", encoding="utf-8") as f:
+            with _storage_open(self.path, "r") as f:
                 self._data = f.read()
         except Exception as e:
             core.log("error", f"error while loading text storage: {e}")
@@ -486,12 +589,20 @@ class StorageText:
         if TEMPORARY:
             return self
 
-        with open(self.path, "w", encoding="utf-8") as f:
+        with _storage_open(self.path, "w") as f:
             f.write(self._data)
 
         # update mtime after saving so we know our cache is fresh
         self._update_mtime()
         return self
+
+    def search(self, query, radius=50):
+        """searches the text for your query and returns a snippet if found"""
+        text = self.get()
+        if not text:
+            return None
+        snippets = core.search.make_snippets(text, query, radius=radius, max_snippets=1)
+        return snippets[0] if snippets else None
 
     def _file_changed(self):
         """check if the file on disk has changed"""

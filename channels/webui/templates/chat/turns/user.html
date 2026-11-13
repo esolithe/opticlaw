@@ -5,7 +5,7 @@
                 <template x-for="(block, blockIndex) in message.content" :key="'block-' + blockIndex">
                     <div>
                         <template x-if="blockIndex === 0">
-                            <span x-html="block.text"></span>
+                            <div x-md="{ message: { content: block.text }, live: false, raw: true }"></div>
                         </template>
 
                         <template x-if="blockIndex > 0 && message._metadata?.filenames">
@@ -25,9 +25,13 @@
             </div>
         </template>
 
+        {{ extension_slot("above_message") }}
+
         <template x-if="typeof message.content === 'string'">
-            <div x-html="renderMarkdown(message.content)" :class="{'command': message._metadata?.is_cmd}"></div>
+            <div x-md="{ message: message, live: false, raw: message._metadata?.is_cmd }" :class="{'command': message._metadata?.is_cmd}"></div>
         </template>
+
+        {{ extension_slot("below_message") }}
     </div>
 </template>
 
@@ -40,3 +44,4 @@
         </div>
     </div>
 </template>
+

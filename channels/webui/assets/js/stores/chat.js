@@ -1,12 +1,49 @@
+function mergeTurnHistory(existing, incoming) {
+    incoming = incoming || [];
+    if (!Array.isArray(existing) || existing.length === 0) return incoming;
+
+    const merged = new Array(incoming.length);
+
+    for (let i = 0; i < incoming.length; i++) {
+        merged[i] = (existing[i] && existing[i].hash && existing[i].hash === incoming[i].hash)
+            ? existing[i]
+            : incoming[i];
+    }
+
+    const tail = existing[existing.length - 1];
+    if (tail && tail.live === true) {
+        let lastUser = -1;
+        for (let i = incoming.length - 1; i >= 0; i--) {
+            if (incoming[i].role === 'user') { lastUser = i; break; }
+        }
+
+        const kept = lastUser === -1 ? merged : merged.slice(0, lastUser + 1);
+        kept.push(tail);
+        return kept;
+    }
+
+    return merged;
+}
+
+function parseStoredTags() {
+    try {
+        const parsed = JSON.parse(localStorage.getItem('sidebarTagFilter') || '[]');
+        return Array.isArray(parsed) ? parsed.filter(t => typeof t === 'string') : [];
+    } catch (err) {
+        return [];
+    }
+}
+
 CHAT_STORE = {
     /*
      * alpine.js store for chat state
      */
 
-    visibleChats: [],
-    chatOffset: 0,
+    dayGroups: [],
     chatLimit: 10,
-    hasMoreChats: true,
+    dayFetchGen: 0,
+
+    moveChatTarget: null,
 
     categories: [],
     chat: {},
@@ -20,12 +57,67 @@ CHAT_STORE = {
     user_input: '',
     last_user_input: '',
 
+    inputHistory: JSON.parse(localStorage.getItem('input_history') || '[]'),
+    historyIndex: -1,
+    draftValue: '',
+
+    async loadInputHistory() {
+        try {
+            const saved = await simpleApiFetch('/api/input_history');
+            if (Array.isArray(saved)) {
+                this.inputHistory = saved;
+                localStorage.setItem('input_history', JSON.stringify(saved));
+            }
+        } catch (err) {
+            console.warn('loading input history failed:', err);
+        }
+    },
+
+    pushInputHistory(msg) {
+        msg = (msg || '').trim();
+        if (!msg) return;
+        if (this.inputHistory[this.inputHistory.length - 1] !== msg) {
+            this.inputHistory.push(msg);
+            if (this.inputHistory.length > 100) this.inputHistory.shift();
+            localStorage.setItem('input_history', JSON.stringify(this.inputHistory));
+            // fire-and-forget: the backend is the source of truth now
+            simpleApiPost('/api/input_history', { message: msg }).catch(() => {});
+        }
+        this.historyIndex = -1;
+        this.draftValue = '';
+    },
+
+    historyPrev() {
+        if (!this.inputHistory.length) return;
+        if (this.historyIndex === -1) {
+            this.draftValue = this.user_input;
+            this.historyIndex = this.inputHistory.length - 1;
+        } else if (this.historyIndex > 0) {
+            this.historyIndex--;
+        }
+        this.user_input = this.inputHistory[this.historyIndex];
+    },
+
+    historyNext() {
+        if (this.historyIndex === -1) return;
+        if (this.historyIndex < this.inputHistory.length - 1) {
+            this.historyIndex++;
+            this.user_input = this.inputHistory[this.historyIndex];
+        } else {
+            this.historyIndex = -1;
+            this.user_input = this.draftValue;
+            this.draftValue = '';
+        }
+    },
+
     currentTokenUsage: 0,
+
+    contextBreakdown: null,
 
     async load() {
         // called by Alpine.init
-        await this.reloadChats();
         await this.reloadCategories();
+        this.loadInputHistory();
 
         const result = await simpleApiFetch(`/api/chat/current`);
         if (!result) { return }
@@ -33,8 +125,12 @@ CHAT_STORE = {
         this.chat = result;
         this.selectedChat = result.id;
         this.selectedCategory = result.category;
-        this.turnHistory = result.turn_history;
+        this.turnHistory = mergeTurnHistory(this.turnHistory, result.turn_history);
         this.currentTokenUsage = result.token_usage;
+
+        Alpine.store('ui').prepareBottomWindow();
+
+        await this.reloadChats();
 
         // ensure the chat exists in the visible sidebar list before scrolling
         await this.ensureChatVisible(this.selectedChat);
@@ -52,71 +148,320 @@ CHAT_STORE = {
         const result = await simpleApiFetch(`/api/chat/load/${chatId}`);
         if (!result) { return; }
 
+        const ui = Alpine.store('ui');
+
+        this.turnHistory = [];
+        ui.resetTurnMounts();
+        await Alpine.nextTick();
+
         this.chat = result;
         this.selectedChat = chatId;
         this.selectedCategory = result.category;
         this.turnHistory = result.turn_history;
-
-        ui = Alpine.store('ui');
         this.currentTokenUsage = result.token_usage;
+
+        // bottom-up: mount the tail of the chat before scrolling to it
+        ui.prepareBottomWindow();
+
+        await this.ensureChatVisible(chatId);
 
         // make sure it always shows the bottom of the chat
         await ui.forceScrollToBottom();
     },
 
-    async reloadChats() {
-        this.chatOffset = 0;
-        this.visibleChats = [];
-        await this._fetchChats();
+    /* ----------------------
+     * sidebar search
+     * ----------------------- */
+    searchQuery: '',
+    searchResults: [],
+    searchLoading: false,
+    searchDebounce: null,
 
-        // ensure there are always more chats loaded than what fits in the current viewport
-        await this.ensureMoreChats();
+    searchInContent: localStorage.getItem('sidebarSearchInContent') === 'true',
+
+    get searching() { return Boolean(this.searchQuery.trim()); },
+
+    /* ----------------------
+     * tag filter (sidebar)
+     * ----------------------- */
+    selectedTags: parseStoredTags(),
+    availableTags: [],
+
+    tagParam() {
+        return this.selectedTags.map(t => `&tags=${encodeURIComponent(t)}`).join('');
+    },
+
+    async loadTags() {
+        const qs = this.catParam();
+        const url = `/api/chats/tags${qs ? `?${qs.slice(1)}` : ''}`;
+
+        let tags = null;
+        try {
+            tags = await simpleApiFetch(url);
+        } catch (err) {
+            console.warn('loading chat tags failed:', err);
+            return;
+        }
+
+        this.availableTags = tags ?? [];
+
+        // prune selections whose tag no longer exists in this category
+        // (chat deleted, tag removed, or category switched) - silently,
+        // no reload: the list refresh that follows picks it up anyway.
+        const pruned = this.selectedTags.filter(t => this.availableTags.includes(t));
+        if (pruned.length !== this.selectedTags.length) {
+            this.selectedTags = pruned;
+            localStorage.setItem('sidebarTagFilter', JSON.stringify(pruned));
+        }
+    },
+
+    async toggleTag(tag) {
+        if (this.selectedTags.includes(tag)) {
+            this.selectedTags = this.selectedTags.filter(t => t !== tag);
+        } else {
+            this.selectedTags = [...this.selectedTags, tag];
+        }
+        localStorage.setItem('sidebarTagFilter', JSON.stringify(this.selectedTags));
+        await this.reloadChats();
+    },
+
+    async clearTags() {
+        if (this.selectedTags.length === 0) { return; }
+        this.selectedTags = [];
+        localStorage.setItem('sidebarTagFilter', '[]');
+        await this.reloadChats();
+    },
+
+    /* ----------------------
+     * day groups (sidebar)
+     * ----------------------- */
+    collapsedDays: {},
+
+    tzOffset() {
+        // JS getTimezoneOffset: minutes behind UTC (CEST -> -120)
+        return new Date().getTimezoneOffset();
+    },
+
+    catParam() {
+        return this.selectedCategory ? `&category=${encodeURIComponent(this.selectedCategory)}` : '';
+    },
+
+    todayKey() {
+        return localDayKey(new Date());
+    },
+
+    isGroupCollapsed(group) {
+        // search results are always shown fully - hiding matches behind
+        // a collapsed header would be maddening
+        if (this.searching) { return false; }
+        if (group.key in this.collapsedDays) { return Boolean(this.collapsedDays[group.key]); }
+        return group.key !== this.todayKey();
+    },
+
+    toggleDayGroup(group) {
+        const collapse = !this.isGroupCollapsed(group);
+        this.collapsedDays[group.key] = collapse;
+
+        if (!collapse) {
+            Alpine.nextTick(() => this.ensureDayChatsFilled(group));
+        }
+    },
+
+    async ensureDayChatsFilled(group, el) {
+        while (true) {
+            // the x-if may have (re)rendered the loader: re-resolve it
+            if (!el || !el.isConnected) {
+                el = document.querySelector(`[data-day-loader="${group.key}"]`);
+            }
+            if (!el || !el.isConnected) { break; }
+
+            const container = el.closest('.chats');
+            if (!container || !group.hasMore) { break; }
+
+            // another call is fetching this group: wait for it
+            if (group.loading) {
+                await new Promise(resolve => setTimeout(resolve, 50));
+                continue;
+            }
+
+            const rect = el.getBoundingClientRect();
+            const crect = container.getBoundingClientRect();
+            const visible = rect.top < crect.bottom && rect.bottom > crect.top;
+            if (!visible) { break; }
+
+            const progressed = await this.loadDayChats(group);
+            if (!progressed) { break; }
+
+            // let alpine render the new chats before re-measuring
+            await Alpine.nextTick();
+        }
+    },
+
+    // the x-for source in sidebar.html: day groups while browsing,
+    // search results bucketed into groups while searching
+    displayGroups() {
+        if (!this.searching) { return this.dayGroups; }
+
+        const groups = [];
+        const byKey = {};
+
+        for (const chat of this.searchResults) {
+            const key = chat.group_key || 'undated';
+            if (!(key in byKey)) {
+                byKey[key] = { key: key, label: chat.group_label || 'Undated', chats: [] };
+                groups.push(byKey[key]);
+            }
+            byKey[key].chats.push(chat);
+        }
+
+        return groups;
+    },
+
+    async reloadDayGroups() {
+        const gen = ++this.dayFetchGen;
+
+        // tagParam() narrows day counts to the active tag filter
+        const groupList = await simpleApiFetch(
+            `/api/chats/days?tz_offset=${this.tzOffset()}${this.catParam()}${this.tagParam()}`
+        );
+
+        // stale: a newer reload superseded this one
+        if (gen !== this.dayFetchGen) { return; }
+
+        this.dayGroups = (groupList ?? []).map(g => ({
+            key: g.key,
+            label: g.label,
+            count: g.count,
+            chats: [],
+            offset: 0,
+            hasMore: g.count > 0,
+            loading: false,
+            loaded: false
+        }));
+
+        await Promise.all(
+            this.dayGroups.filter(g => !this.isGroupCollapsed(g))
+                .map(g => this.loadDayChats(g))
+        );
+
+        await Alpine.nextTick();
+        await Promise.all(
+            this.dayGroups.filter(g => !this.isGroupCollapsed(g))
+                .map(g => this.ensureDayChatsFilled(g))
+        );
+    },
+
+    // loads one page of chats for a single day group. resolves to true
+    // if progress was made, false if nothing more can load (already
+    // loading / exhausted / failed / stale).
+    async loadDayChats(group) {
+        if (!group || group.loading || !group.hasMore) { return false; }
+
+        group.loading = true;
+        const gen = this.dayFetchGen;
+        const before = group.chats.length;
+
+        const result = await simpleApiFetch(
+            `/api/chats/day?day=${group.key}&offset=${group.offset}` +
+            `&limit=${this.chatLimit}&tz_offset=${this.tzOffset()}${this.catParam()}${this.tagParam()}`
+        );
+
+        group.loading = false;
+
+        // stale (list reloaded mid-flight) or failed: mark exhausted so
+        // loop callers can't spin; a reload rebuilds the group anyway.
+        if (gen !== this.dayFetchGen || !this.dayGroups.includes(group)) { return false; }
+
+        if (!result) { group.hasMore = false; return false; }
+
+        group.chats.push(...result.messages);
+        group.offset += result.messages.length;
+        group.hasMore = result.has_more;
+        group.loaded = true;
+
+        return group.chats.length > before;
+    },
+
+    setSearchInContent(on) {
+        this.searchInContent = Boolean(on);
+        localStorage.setItem('sidebarSearchInContent', this.searchInContent);
+
+        // re-run the active search so the mode switch applies immediately
+        clearTimeout(this.searchDebounce);
+        if (this.searching) {
+            this.searchResults = [];
+            this.searchLoading = true;
+            this._runChatSearch(this.searchQuery.trim());
+        }
+    },
+
+    setSearchQuery(q) {
+        this.searchQuery = q;
+        clearTimeout(this.searchDebounce);
+
+        if (!q.trim()) {
+            // back to pagination mode: visibleChats was frozen (not
+            // mutated) during the search, so just switch back.
+            this.searchResults = [];
+            this.searchLoading = false;
+            return;
+        }
+
+        this.searchResults = [];
+        this.searchLoading = true;
+
+        // debounce so we don't hit the backend on every keystroke
+        this.searchDebounce = setTimeout(() => this._runChatSearch(q.trim()), 200);
+    },
+
+    async _runChatSearch(q) {
+        this.searchLoading = true;
+        const results = await this.searchGlobal(q, this.searchInContent, this.selectedCategory, this.selectedTags);
+
+        // stale: query changed or was cleared while the request was in flight
+        if (this.searchQuery.trim() !== q) { return; }
+
+        this.searchResults = results;
+        this.searchLoading = false;
+    },
+
+    async reloadChats() {
+        await this.loadTags();
+        await this.reloadDayGroups();
+
+        // refresh search results alongside, so renames/deletes (which
+        // reload the list) don't leave the search mode list stale.
+        if (this.searching) { await this._runChatSearch(this.searchQuery.trim()); }
     },
 
     async ensureChatVisible(chatId) {
-        const exists = this.visibleChats.some(c => c.id === chatId);
-        if (exists) { return; }
-        
-        // keep loading more chats until the target chat appears
-        while (this.hasMoreChats && !this.visibleChats.some(c => c.id === chatId)) {
-            await this.loadMoreChats();
+        for (const group of this.dayGroups) {
+            if (group.chats.some(c => c.id === chatId)) {
+                this.collapsedDays[group.key] = false;
+                return true;
+            }
+
+            while (group.hasMore) {
+                // a concurrent per-group loader fetch is in flight: wait
+                // for it instead of treating 'false' as 'no progress'
+                while (group.loading) {
+                    await new Promise(resolve => setTimeout(resolve, 50));
+                }
+
+                const progressed = await this.loadDayChats(group);
+                if (group.chats.some(c => c.id === chatId)) {
+                    this.collapsedDays[group.key] = false;
+                    return true;
+                }
+                if (!progressed) { break; }
+            }
         }
+
+        return false;
     },
 
-    async loadMoreChats() {
-        if (!this.hasMoreChats) { return; }
-        await this._fetchChats();
-    },
-
-    async ensureMoreChats(el) {
-        /* 
-         * makes sure there are always more chats loaded
-         * than what the viewport can show,
-         * so that x-intersect always works (because it needs to be out of view first)
-         */
-        const intersect_el = document.getElementById("chat-scroll-loader");
-        if (!intersect_el) { return; }
-
-        const rect = intersect_el.getBoundingClientRect();
-
-        if (rect.top < window.innerHeight && rect.bottom > 0) {
-            await this.loadMoreChats();
-        }
-    },
-
-    async _fetchChats() {
-        const offset = this.chatOffset;
-        const catParam = this.selectedCategory ? `&category=${encodeURIComponent(this.selectedCategory)}` : '';
-        const result = await simpleApiFetch(`/api/chats?offset=${offset}&limit=${this.chatLimit}${catParam}`);
-        if (!result) { return; }
-
-        this.visibleChats.push(...result.messages);
-        this.chatOffset += result.messages.length;
-        this.hasMoreChats = result.has_more;
-    },
-
-    async newChat() {
-        await simpleApiPost('/api/chat/new');
+    async newChat(category = null) {
+        await simpleApiPost('/api/chat/new', { category: category ?? this.selectedCategory });
 
         result = await simpleApiFetch('/api/chat/current');
         if (!result) { return; }
@@ -128,6 +473,11 @@ CHAT_STORE = {
         this.currentTokenUsage = result.token_usage;
         this.turnHistory = result.turn_history;
 
+        // the new chat may live in a category the dropdown doesn't list yet
+        await this.reloadCategories();
+
+        this.collapsedDays[this.todayKey()] = false;
+
         await this.reloadChats();
         await this.reloadChat();
     },
@@ -137,11 +487,46 @@ CHAT_STORE = {
         await this.reloadChats();
     },
 
+    async moveChat(chat_id, category) {
+        await simpleApiPost(`/api/chat/set-category/${chat_id}`, { category: category });
+
+        if (chat_id === this.selectedChat) {
+            this.selectedCategory = category;
+            await this.reloadChat();
+        }
+
+        await this.reloadCategories();
+        await this.reloadChats();
+    },
+
     async deleteChat(chat_id) {
         if (!confirm("Are you sure you want to delete this chat?")) { return }
 
         await simpleApiPost(`/api/chat/delete/${chat_id}`);
+
+        await this.reloadCategories();
+
+        const cats = this.categories ?? [];
+        if (this.selectedCategory && !cats.includes(this.selectedCategory)) {
+            this.selectedCategory = cats.includes('general')
+                ? 'general'
+                : (cats[0] ?? 'general');
+        }
+
         await this.reloadChats();
+    },
+
+    async deleteCategory(name) {
+        await simpleApiPost('/api/chats/categories/delete', { name: name });
+
+        await this.reloadCategories();
+
+        if (this.selectedCategory === name) {
+            this.selectedCategory = 'general';
+        }
+
+        await this.reloadChats();
+        await this.reloadChat();
     },
 
     async reloadChat() {
@@ -155,19 +540,51 @@ CHAT_STORE = {
         const result = await simpleApiFetch(`/api/chat/current`);
         if (!result) { return }
 
+        const prevCategory = this.selectedCategory;
+
         this.chat = result;
         this.selectedChat = result.id;
         this.selectedCategory = result.category;
 
-        this.turnHistory = result.turn_history;
+        // reuse the existing turn objects for every turn that didn't actually
+        // change, so alpine doesn't re-render (and re-parse the markdown of)
+        // the entire conversation on every single reload
+        this.turnHistory = mergeTurnHistory(this.turnHistory, result.turn_history);
+
+        Alpine.store('ui').syncMountWindows();
+
+        if (result.category !== prevCategory) {
+            await this.reloadCategories();
+            await this.reloadChats();
+            await this.ensureChatVisible(result.id);
+        }
     },
 
     async reloadCategories() {
         this.categories = await simpleApiFetch('/api/chats/categories');
     },
 
+    dropdownCategories() {
+        let cats = [...(this.categories ?? [])];
+        if (this.selectedCategory && !cats.includes(this.selectedCategory)) {
+            cats.push(this.selectedCategory);
+        }
+
+        return cats;
+    },
+
+    dropdownValue() {
+        void (this.categories ?? []).length;
+        return this.selectedCategory;
+    },
+
     async selectCategory(category) {
+        // no-op when the dropdown fires a change back to the current value
+        if (category === this.selectedCategory) { return; }
+
         this.selectedCategory = category;
+        // reloadChats() re-runs the sidebar search when active, so the
+        // results are already re-scoped to the new category after this
         await this.reloadChats();
     },
 
@@ -180,13 +597,12 @@ CHAT_STORE = {
 
     async send(text) {
         stream = Alpine.store('stream');
-        if (stream.state !== 'idle') {
-            // don't allow sending during a stream
-            // (TODO: allow nudging (interrupting the stream and sending a new message))
-            return;
-        }
 
-        Alpine.store("stream").state = "message_sending";
+        const wasSteering = stream.state !== 'idle';
+
+        // record the sent text in the input history before clearing the box
+        this.pushInputHistory(text);
+
         await this.clearInput();
 
         // handle any files the user may have attached
@@ -217,6 +633,16 @@ CHAT_STORE = {
             files: files
         });
 
+        // if the message never made it onto the socket, restore the draft
+        // (and keep any attached files) so the user can retry
+        if (success === false) {
+            this.user_input = text;
+            if (!wasSteering) {
+                Alpine.store("stream").state = "idle";
+            }
+            return;
+        }
+
         uploadStore.clear();
     },
 
@@ -227,7 +653,14 @@ CHAT_STORE = {
       const turn = this.turnHistory[turnIndex];
       const msg = turn?.messages?.[turn.messages?.length - 1]; // last message in the turn
       if (!msg) return;
-      navigator.clipboard.writeText(msg.content)
+
+      // if the message had multimedia in it, extract only the text bit
+      const filenames = msg._metadata?.filenames || [];
+      const text = Array.isArray(msg.content)
+        ? msg.content.filter((b, i) => b?.type === 'text' && b.text && !filenames[i]).map(b => b.text).join('\n\n')
+        : msg.content;
+
+      navigator.clipboard.writeText(text)
         .then(() => {
             return true;
         })
@@ -255,8 +688,6 @@ CHAT_STORE = {
                 "type": "message_regenerate",
                 "index": turn.first_message_index
             });
-
-            Alpine.store('stream').state = 'message_sending';
         });
     },
 
@@ -291,24 +722,20 @@ CHAT_STORE = {
      * ----------------------- */
     async export() {
         try {
-            // Get the export string from the backend
-            const exportStr = await simpleApiFetch('/api/chat/export');
-            
-            if (!exportStr) {
+            // the backend returns {content, filename}: title->filename
+            // sanitization moved server-side
+            const result = await simpleApiFetch('/api/chat/export');
+
+            if (!result || !result.content) {
                 throw new Error('Export returned empty data');
             }
 
-            // Get chat title for filename
-            const chatTitle = this.chat?.title || 'chat-export';
-            const safeTitle = chatTitle.replace(/[\/\\:*?"<>|]/g, '_');
-            const filename = `${safeTitle}.txt`;
-
             // Create blob and trigger download
-            const blob = new Blob([exportStr], { type: 'text/plain' });
+            const blob = new Blob([result.content], { type: 'text/plain' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = filename;
+            a.download = result.filename || 'chat-export.txt';
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -322,32 +749,16 @@ CHAT_STORE = {
     /* ----------------------
      * global search
      * ----------------------- */
-    async searchGlobal(query, searchInContent = true, category = null) {
+    async searchGlobal(query, searchInContent = true, category = null, tags = [], sort = 'updated') {
         try {
-            const result = await simpleApiPost('/api/chats/search', {
+            return await simpleApiPost('/api/chats/search', {
                 query: query,
                 search_in_content: searchInContent,
-                category: category
+                category: category,
+                tags: tags,
+                sort: sort,
+                tz_offset: this.tzOffset()
             });
-            
-            const queryLower = (query || '').toLowerCase();
-
-            // Priority sort:
-            // 1. Chats whose title contains the query come first
-            // 2. Within each group, sorted by updated descending (newest first)
-            result.sort((a, b) => {
-                const aMatches = (a.title || '').toLowerCase().includes(queryLower);
-                const bMatches = (b.title || '').toLowerCase().includes(queryLower);
-
-                // Primary: matching titles first
-                if (aMatches && !bMatches) return -1;
-                if (!aMatches && bMatches) return 1;
-
-                // Secondary: both match or both don't → sort by date descending
-                return (b.updated || '').localeCompare(a.updated || '');
-            });
-
-            return result;
         } catch (err) {
             console.error('Global search failed:', err);
             return [];
@@ -366,16 +777,38 @@ CHAT_STORE = {
      * chat-specific getters
      * ----------------------- */
     get promptprogress() {
-        // does the math for the prompt processing indicator over in components/promptprocess.html
-        // the math was ported straight over from the old webUI because, well, it works, and it's clean code
+        // llama.cpp router model-load progress takes over the indicator
+        // while a model is being swapped in, before prompt eval begins.
+        const load = Alpine.store("stream").modelLoad;
+        if (load) {
+            const percent = load.percent ?? 0;
+
+            // trim the org prefix from the router's repo:tag id
+            // ("ggml-org/gemma-3-4b-it-GGUF:Q4_K_M" -> "gemma-3-4b-it-GGUF:Q4_K_M")
+            const modelName = (load.model || "").split("/").pop();
+
+            let label = modelName ? `Loading ${modelName}` : "Loading model";
+            if (load.status === "queued") { label = `Queued: ${modelName || "model"}`; }
+            if (load.status === "downloading") { label = `Downloading ${modelName || "model"}`; }
+
+            const stage = load.stage ? ` · ${load.stage.replace(/_/g, " ")}` : "";
+
+            return {
+                mode: "model_load",
+                percent,
+                percent_str: `${percent}%`,
+                remaining_str: `(${label}${stage})`,
+                show_eta: false
+            };
+        }
+
         const progressData = Alpine.store("stream").processing;
 
         const cache = progressData.cache || 0;
-        const processed = progressData.processed - cache;
-        const total = progressData.total - cache;
-        const percent = total > 0 ? Math.round((processed / total) * 100) : 0;
-        const elapsed = progressData.time_ms / 1000;
-        const remaining = (total - processed) > 0 ? (elapsed / processed) * (total - processed) : 0;
+        const processed = (progressData.processed || 0) - cache;
+        const total = (progressData.total || 0) - cache;
+        const percent = progressData.percent ?? 0;
+        const remaining = progressData.eta_seconds || 0;
 
         return {
             cache,
@@ -383,9 +816,11 @@ CHAT_STORE = {
             total,
             percent,
             percent_str: `${percent}%`,
-            elapsed: elapsed.toFixed(1),
+            elapsed: ((progressData.time_ms || 0) / 1000).toFixed(1),
             remaining,
-            remaining_str: `(ETA: ${Math.ceil(remaining)}s)`
+            show_eta: processed > 0 && remaining > 0,
+            // placeholder instead of hiding ETA so pill width stays stable
+            remaining_str: (processed > 0 && remaining > 0) ? `(ETA: ${Math.ceil(remaining)}s)` : `(ETA: ...)`
         };
     }
 }

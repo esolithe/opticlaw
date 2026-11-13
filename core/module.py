@@ -18,6 +18,7 @@ class ModuleConfig:
 
     def get(self, *args, **kwargs):
         default = kwargs.get("default", None)
+        explicit_default = "default" in kwargs
         if not args:
             return default
 
@@ -25,6 +26,7 @@ class ModuleConfig:
         # If the last argument is not a string, or is empty, treat it as an explicit default
         if keys and not isinstance(keys[-1], str) or not keys[-1]:
             default = keys.pop()
+            explicit_default = True
 
         current = self.config.to_dict()
 
@@ -33,6 +35,11 @@ class ModuleConfig:
             if isinstance(current, dict) and key in current:
                 current = current[key]
             else:
+                # fall back to default (as defined in the module schema) if no value was found
+                if not explicit_default and len(keys) == 1:
+                    declared = self.structure.get(keys[0])
+                    if isinstance(declared, dict) and "default" in declared:
+                        return copy.deepcopy(declared["default"])
                 return default
 
         return current
@@ -51,6 +58,9 @@ class Module:
 
     # unsafe flag can mark a module as risky to enable in supported settings UI's
     unsafe = False
+
+    # category groups modules together in supported UI's (such as the webui)
+    category = ""
 
     # list of python dependencies that need to be installed for the module to work
     dependencies = []
@@ -123,7 +133,7 @@ class Module:
         """This method will insert its return value into the end of the context (after the conversation history) if something is returned (defaults to None). Useful for things that change frequently, such as the time. Using the prompt at the end of conversation history means history does not have to be reprocessed if the prompt changes."""
         return None
 
-    async def on_message_inject(self):
+    async def on_message_inject(self, user_message: str):
         """This method will inject whatever string you return here into the user's message. Very useful for adding extra data that should persist in history. For example, when injecting timestamps, instead of using the end prompt for it (which would only show the AI what time it currently is), it can now give the AI a sense of when every message was sent."""
         return None
 
@@ -153,6 +163,20 @@ class Module:
     async def on_uninstall(self):
         """Overridable method that triggers when the auto-installer uninstalls the dependencies for a module"""
         pass
+
+# --------------
+# tool decorator (@core.module.tool)
+def tool(func=None, bypass_timeout=False):
+    """Decorator that marks a method as a tool callable by the AI."""
+    def decorator(func):
+        func._is_tool = True
+        func._bypass_timeout = bypass_timeout
+        return func
+
+    if func is not None:
+        return decorator(func)
+
+    return decorator
 
 # --------------
 # command decorator (@core.module.command)

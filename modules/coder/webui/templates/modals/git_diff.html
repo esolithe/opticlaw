@@ -1,0 +1,58 @@
+{# -- AI GENERATED CODE (Qwen3.8 Flash Next) :: 2026-10-13
+   diff viewer modal: split (side-by-side) on desktop, unified on mobile.
+   both views are rendered; CSS media queries control which is visible.
+   opened via $store.ui.openModal('git_diff'). #}
+<template x-if="$store.ui.currentModal === 'git_diff' && $store.gitPanel" x-cloak>
+    <div class="modal git-diff-modal" @keydown.escape.window="$store.gitPanel.closeDiff()">
+        <div class="header">
+            <h2 class="coder-editor-title">
+                <span x-text="$store.gitPanel.diff.path"></span>
+                <span class="git-ro-tag" x-show="$store.gitPanel.diff.staged">staged</span>
+                <span class="git-ro-tag unpushed" x-show="$store.gitPanel.diff.committed">unpushed</span>
+            </h2>
+            <div class="coder-editor-header-actions">
+                {# open in editor with diff highlights #}
+                <button
+                    type="button"
+                    class="coder-editor-icon-btn"
+                    :disabled="$store.gitPanel.diff.loading"
+                    @click="$store.gitPanel.editFile()"
+                    title="Open in editor with changes highlighted"
+                    aria-label="Edit file"
+                >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                        <path d="m15 5 4 4" />
+                    </svg>
+                </button>
+                <button class="close" @click="$store.gitPanel.closeDiff()" aria-label="Close diff">&times;</button>
+            </div>
+        </div>
+
+        {# unified diff: visible on mobile only #}
+        <pre class="git-diff-body git-diff-unified"><template x-for="(line, i) in $store.gitPanel.diff.lines" :key="i"><div class="git-diff-line" :class="{ add: line.startsWith('+') && !line.startsWith('+++'), del: line.startsWith('-') && !line.startsWith('---'), hunk: line.startsWith('@@'), meta: line.startsWith('+++') || line.startsWith('---') }" x-text="line || ' '"></div></template></pre>
+
+        {# split diff: visible on desktop only #}
+        <div class="git-split-body git-diff-split">
+            <template x-if="$store.gitPanel.diff.loading">
+                <div class="coder-empty">loading diff..</div>
+            </template>
+            <template x-if="!$store.gitPanel.diff.loading && !$store.gitPanel.diff.rows.length">
+                <div class="coder-empty">(no changes)</div>
+            </template>
+            <table class="git-split-table" x-show="!$store.gitPanel.diff.loading && $store.gitPanel.diff.rows.length">
+                <colgroup><col class="ln-col"><col class="code-col"><col class="ln-col"><col class="code-col"></colgroup>
+                <tbody>
+                    <template x-for="(row, i) in $store.gitPanel.diff.rows" :key="i">
+                        <tr :class="'split-' + row.type">
+                            <td class="ln" x-text="row.old_num || ''"></td>
+                            <td class="code" x-text="row.old_text || ' '"></td>
+                            <td class="ln" x-text="row.new_num || ''"></td>
+                            <td class="code" x-text="row.new_text || ' '"></td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</template>

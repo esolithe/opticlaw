@@ -1,0 +1,539 @@
+
+@keyframes library-spin {
+    to { transform: rotate(360deg); }
+}
+
+.module-library {
+    width: 100%;
+
+    /* Update / Uninstall pair on Your Modules / Your Channels cards
+       (single wrapper: this Alpine build's x-if is single-root only) */
+    .unified-card .git-card-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    /* square icon-only button variant */
+    .library-btn.icon {
+        padding: 7px 10px;
+
+        svg {
+            width: 15px;
+            height: 15px;
+        }
+    }
+
+    /* small muted helper line under a repo manager */
+    .library-note {
+        font-size: 12px;
+        color: var(--text-secondary);
+        margin: 6px 0 10px 0;
+    }
+
+
+    /* buttons: same visual language as the settings footer, but local */
+    .library-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 7px 14px;
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-sm);
+        background: var(--bg-tertiary);
+        color: var(--text-primary);
+        font-family: var(--font-primary);
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        white-space: nowrap;
+
+        &:hover:not(:disabled) {
+            border-color: var(--accent);
+            background: var(--button-bg);
+            color: var(--button-text);
+        }
+
+        &:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+        }
+
+        &.primary {
+            background: var(--button-bg);
+            color: var(--button-text);
+            border-color: var(--border-color);
+
+            &:hover:not(:disabled) {
+                box-shadow: 0 0 12px var(--accent-glow);
+            }
+        }
+
+        &.danger:hover:not(:disabled) {
+            border-color: var(--error);
+            color: var(--error);
+            background: var(--error-bg);
+        }
+    }
+
+    /* live clone percentage, shown under a url bar while staging */
+    .library-clone-progress {
+        height: 6px;
+        margin: -8px 0 14px 0;
+        border: 1px solid var(--border-color);
+        border-radius: 99px;
+        background: var(--bg-primary);
+        overflow: hidden;
+    }
+
+    .library-clone-fill {
+        height: 100%;
+        border-radius: 99px;
+        background: var(--accent);
+        transition: width 0.35s ease;
+    }
+
+    .library-message {
+        padding: 9px 14px;
+        border-radius: var(--radius-sm);
+        margin-bottom: 14px;
+        font-size: 13px;
+        word-break: break-word;
+
+        &.success {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--accent);
+            color: var(--text-primary);
+        }
+
+        &.error {
+            background: var(--error-bg);
+            border: 1px solid var(--error-border);
+            color: var(--error);
+        }
+
+        &.info {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+        }
+    }
+
+    /* repo url install bar: one git repo per module/channel */
+    .library-urlbar {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 14px;
+
+        .library-url-input {
+            flex: 1;
+            min-width: 0;
+            box-sizing: border-box;
+            padding: 7px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-family: var(--font-primary);
+            font-size: 13px;
+
+            &:focus {
+                outline: none;
+                border-color: var(--accent);
+            }
+        }
+    }
+
+    .library-empty {
+        color: var(--text-muted);
+        font-size: 13px;
+        margin: 8px 0;
+    }
+
+    .library-group {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+
+        .library-group-header {
+            margin: 0;
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-muted);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+    }
+
+    /* stacked cards (skills panel) get breathing room between them */
+    .library-item + .library-item {
+        margin-top: 10px;
+    }
+
+    .library-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 14px 16px;
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-sm);
+        background: var(--bg-tertiary);
+        transition: border-color 0.15s ease;
+
+        &:hover {
+            border-color: var(--accent);
+        }
+
+        .library-item-main {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .library-item-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .library-item-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .library-item-doc {
+            font-size: 12px;
+            line-height: 1.45;
+            color: var(--text-secondary);
+            margin: 0;
+        }
+
+        .library-item-repo {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin: 0;
+        }
+
+        .library-item-actions {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            flex-shrink: 0;
+
+            /* equal-width action buttons so the card edges line up */
+            .library-btn {
+                width: 104px;
+                justify-content: center;
+            }
+        }
+    }
+}
+
+/* phones: cards stack, actions become a horizontal row */
+@media (max-width: 768px) {
+    .module-library .library-item {
+        flex-direction: column;
+        align-items: stretch;
+
+        .library-item-actions {
+            flex-direction: row;
+
+            .library-btn {
+                flex: 1;
+                justify-content: center;
+            }
+        }
+    }
+}
+
+.library-audit-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1500;
+    background: rgba(0, 0, 0, 0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+.library-audit-modal {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: min(1000px, 100%);
+    max-height: 92vh;
+    padding: 18px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md, 10px);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    overflow: hidden;
+
+    .library-audit-header {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+
+        .section-title {
+            margin: 0;
+        }
+
+        .library-audit-repo {
+            font-size: 12px;
+            color: var(--text-secondary);
+            text-decoration: underline;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+    }
+
+    .library-audit-lead {
+        margin: 0;
+        font-size: 13px;
+        color: var(--text-secondary);
+    }
+
+    .library-audit-flags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+
+        .audit-flag {
+            display: inline-flex;
+            align-items: baseline;
+            gap: 6px;
+            padding: 5px 10px;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            font-family: var(--font-primary);
+            font-size: 12px;
+            cursor: pointer;
+            transition: border-color 0.15s ease, box-shadow 0.15s ease;
+
+            .audit-flag-name {
+                font-weight: 600;
+                font-family: var(--font-monospace, monospace);
+            }
+
+            .audit-flag-line {
+                opacity: 0.65;
+            }
+
+            .audit-flag-desc {
+                color: var(--text-secondary);
+            }
+
+            &.warn {
+                border-color: rgba(230, 160, 60, 0.6);
+            }
+
+            &:hover {
+                border-color: var(--accent);
+            }
+
+            &.focused {
+                border-color: var(--accent);
+                box-shadow: 0 0 0 2px rgba(160, 120, 240, 0.35);
+            }
+        }
+    }
+
+    .library-audit-warnings {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+
+        .audit-warning {
+            padding: 5px 10px;
+            border: 1px solid rgba(230, 90, 90, 0.55);
+            border-radius: var(--radius-sm);
+            background: rgba(230, 90, 90, 0.12);
+            color: var(--text-primary);
+            font-size: 12px;
+        }
+    }
+
+    .library-audit-filebar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        font-size: 12px;
+        color: var(--text-secondary);
+
+        /* themed dropdown: the teleported modal lives at body level, so no
+           settings-modal select styling reaches it - copy the fields.css look */
+        select {
+            margin-left: 6px;
+            max-width: 320px;
+            padding: 6px 10px;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-family: var(--font-primary);
+            font-size: 12px;
+            cursor: pointer;
+            transition: border-color 0.15s ease;
+
+            &:hover,
+            &:focus {
+                border-color: var(--accent);
+                outline: none;
+            }
+
+            option {
+                background: var(--bg-primary);
+                color: var(--text-primary);
+            }
+        }
+
+        .audit-truncated {
+            font-style: italic;
+        }
+    }
+
+    .library-audit-loading {
+        display: flex;
+        justify-content: center;
+        padding: 30px 0;
+
+        /* duplicated spinner styling: the teleported audit modal lives at body
+           level, so nothing scoped to the tabs can reach it */
+        .spinner {
+            width: 34px;
+            height: 34px;
+            border: 3px solid var(--border-color);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: library-spin 0.8s linear infinite;
+        }
+    }
+
+    .library-audit-error {
+        padding: 10px;
+        border-radius: var(--radius-sm);
+        background: rgba(230, 90, 90, 0.12);
+        font-size: 13px;
+    }
+
+    .library-audit-code {
+        display: flex;
+        flex: 1;
+        min-height: 220px;
+        overflow-y: auto;
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-sm);
+        background: var(--bg-primary);
+        font-size: 13px;
+        line-height: 19px;
+
+        .audit-gutter {
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+            position: sticky;
+            left: 0;
+            padding: 8px 8px;
+            border-right: 1px solid var(--border-color);
+            background: var(--bg-tertiary);
+            color: var(--text-secondary);
+            text-align: right;
+            user-select: none;
+
+            .audit-line {
+                height: 19px;
+                line-height: 19px;
+                font-family: var(--font-monospace, monospace);
+
+                &.focus {
+                    color: var(--accent);
+                    font-weight: 700;
+                }
+            }
+        }
+
+        .audit-code {
+            flex: 1;
+            margin: 0;
+            padding: 8px 12px;
+            /* hljs themes add padding/background: strip it, the container owns both */
+            &.hljs {
+                padding: 8px 12px;
+                background: transparent;
+            }
+
+            code {
+                font-family: var(--font-monospace, monospace);
+                font-size: 13px;
+                line-height: 19px;
+                white-space: pre;
+            }
+        }
+    }
+
+    .library-audit-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+
+        .library-audit-footnote {
+            font-size: 12px;
+            color: var(--text-secondary);
+            font-style: italic;
+        }
+
+        .library-audit-actions {
+            display: flex;
+            gap: 8px;
+        }
+    }
+
+    /* the shared .library-btn lives nested under .module-library, which the
+       teleported modal can never match - replicate its visual language here */
+    .library-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 8px 18px;
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-sm);
+        background: var(--bg-tertiary);
+        color: var(--text-primary);
+        font-family: var(--font-primary);
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        white-space: nowrap;
+
+        &:hover:not(:disabled) {
+            border-color: var(--accent);
+            background: var(--button-bg);
+            color: var(--button-text);
+        }
+
+        &:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+        }
+
+        &.danger:hover:not(:disabled) {
+            border-color: var(--error);
+            color: var(--error);
+            background: var(--error-bg);
+        }
+    }
+}

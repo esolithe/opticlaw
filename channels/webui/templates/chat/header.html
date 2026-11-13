@@ -8,8 +8,14 @@
         {% if config.get("enable_title") %}
             <h1>{{ config.get("title") }}</h1>
         {% endif %}
+
+        <!-- extension slot: modules fill this via a left() macro in <module>/chat/header.html -->
+        {{ extension_slot("left") }}
     </div>
     <div class="right">
+        <!-- extension slot: modules fill this via a right() macro in <module>/chat/header.html -->
+        {{ extension_slot("right") }}
+
         {% if config.get("enable_streaming_state_display") %}
             <span x-text="$store.stream.state.replace('_', ' ')" class="stream-state" x-show="!$store.ui.isMobile" x-cloak></span>
         {% endif %}
@@ -19,9 +25,27 @@
             {% include 'svg/search.svg' %}
         </button>
         -->
+        {% if config.get("enable_model_switcher") and config.get("enable_admin_settings") %}
+        <!-- -- AI GENERATED CODE (Qwen3.8-Flash-Next) :: (2026-10-01) status:reviewed
+             quick model switcher: same cached model list and model.name
+             setting as the settings modal, just one click away in the header.
+             hidden on mobile due to lack of space (like the stream state). -->
+        <div class="model-switcher" x-data="modelQuickSwitch()" x-show="!$store.ui.isMobile" x-cloak>
+            <select class="model-select" :value="currentModel" :disabled="saving"
+                    @change="setModel($event.target.value)"
+                    @focus="lazyFetch()"
+                    title="Switch model">
+                <template x-for="model in options" :key="model">
+                    <option :value="model" x-text="model"></option>
+                </template>
+            </select>
+        </div>
+        {% endif %}
+        {% if config.get("enable_admin_settings") %}
         <button class="btn" id="settings-btn" title="Settings (Ctrl+S)" @click="await $store.ui.openModal('settings')">
             {% include 'svg/gear.svg' %}
         </button>
+        {% endif %}
         <button class="btn" title="Export chat" @click="$store.chat.export()">
             {% include 'svg/download.svg' %}
         </button>

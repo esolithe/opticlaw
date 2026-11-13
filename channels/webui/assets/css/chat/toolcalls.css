@@ -1,5 +1,8 @@
 /* =============================================================================
- *  Tool Calls Container
+ *  Tool Calls
+ *  cardless + roomy: bare header, left-border indent body where args and the
+ *  response are rows in one grid. long values get a soft scroll box that only
+ *  appears when they actually overflow (x-box toggles .boxed).
  *  ============================================================================= */
 
 .tool-calls-container {
@@ -16,281 +19,171 @@
     gap: 8px;
 }
 
-/* =============================================================================
- *  Tool Call Card
- *  ============================================================================= */
-
 .tool-call-card {
-    background: var(--bg-secondary);
-    border: 1px solid var(--tool-border);
-    border-radius: var(--radius-sm);
-    overflow: hidden;
-    transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1),
-                box-shadow 0.2s ease;
-    position: relative;
-    box-shadow: var(--shadow-soft);
     width: 100%;
+    /* anchor for the timeline node-dot */
+    position: relative;
 
-    .name {
-        font-weight: 600;
-        color: var(--accent);
-        font-size: 0.9rem;
-        flex: 1;
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    .streaming {
-        border-left: 3px solid var(--accent);
-        animation: toolCallPulse 1.5s ease-in-out infinite;
-    }
-
-    &:hover {
-        border-color: var(--tool-border-hover);
-    }
-
-    &:last-child {
-        margin-bottom: 0;
-    }
-
+    /* header shares font metrics with the reasoning header (0.85rem, no
+       padding) so the timeline nodes center on every header alike */
     .header {
         display: flex;
         align-items: center;
         gap: 8px;
-        padding: 8px 12px;
         cursor: pointer;
         user-select: none;
-        transition: background 0.15s ease;
-    }
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+        border-radius: var(--radius-sm);
+        padding: 0;
+        transition: filter 0.2s ease;
 
-    .toggle {
-        width: 14px;
-        height: 14px;
-        color: var(--text-muted);
-        transition: transform 0.2s ease;
-        flex-shrink: 0;
-    }
-
-    .toggle-expanded {
-        transform: rotate(90deg);
+        &:hover {
+            filter: brightness(1.03);
+        }
     }
 
     .icon {
-        width: 16px;
-        height: 16px;
-        color: var(--accent);
+        width: 1.18em;
+        height: 1.18em;
+        color: var(--text-secondary);
         flex-shrink: 0;
     }
 
-    .inline-arg {
-        color: var(--text-muted);
+    .name {
         font-size: 0.85rem;
-        flex: 1;
+        color: var(--text-secondary);
+        /* was flex:1 - now shrinkable-auto so the arg summary sits right
+           after the tool name instead of being pushed to the far edge */
+        flex: 0 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+
+        .module {
+            font-weight: 600;
+        }
+    }
+
+    .call-args {
+        font-size: 0.78rem;
+        color: var(--text-secondary);
+        opacity: 0.8;
+        font-family: var(--code-font);
+        flex: 0 1 auto;
         min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
     }
-    
-    .arg-count {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        min-width: 22px;
-        height: 22px;
-        padding: 0 6px;
-        border-radius: var(--radius-full);
-        background: var(--bg-tertiary);
-        color: var(--text-muted);
-        font-size: 0.7rem;
-        font-weight: 600;
-        margin-left: 8px;
-        flex-shrink: 0;
+
+    /* result hint on the header (registry summaries; empty by default) */
+    .call-result {
+        font-size: 0.78rem;
+        color: var(--text-secondary);
+        opacity: 0.8;
+        flex: 0 0 auto;
+        white-space: nowrap;
     }
 
-    .status {
-        font-size: 0.7rem;
-        padding: 3px 8px;
-        border-radius: var(--radius-full);
-        font-weight: 500;
-        flex-shrink: 0;
-
-        &.streaming {
-            background: rgba(99, 102, 241, 0.2);
-            color: var(--accent);
-        }
-        &.pending {
-            background: var(--tool-pending-bg);
-            color: var(--tool-pending-color);
-            animation: statusPulse 1.5s ease-in-out infinite;
-        }
-        &.completed {
-            background: var(--tool-completed-bg);
-            color: var(--tool-completed-color);
-        }
-        &.error {
-            background: var(--error-bg);
-            color: var(--error);
-        }
-    }
-
-    .streaming-dots {
-        display: inline-flex;
-        gap: 2px;
-
-        span {
-            display: inline-block;
-            animation: streamingDot 1.4s infinite ease-in-out;
-
-            &:nth-child(1) { animation-delay: -0.32s; }
-            &:nth-child(2) { animation-delay: -0.16s; }
-            &:nth-child(3) { animation-delay: 0s; }
-        }
-    }
-
+    /* body: generous vertical rhythm. left border/indent removed - the
+       timeline spine of the agent chain provides the structure now */
     .body {
-        max-height: none;
-        overflow-y: auto;
-        transition: max-height 0.3s ease, opacity 0.2s ease, padding 0.2s ease;
-    }
-    
-    .section {
-        padding: 12px 14px;
-        border-top: 1px solid var(--border-color);
-
-        .title {
-            font-size: 0.7rem;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-bottom: 8px;
-        }
-    }
-
-    .args {
         display: flex;
         flex-direction: column;
-        gap: 4px;
-
-        .raw-response {
-            font-family: monospace;
-            white-space: pre-wrap;
-            word-break: break-word;
-            height: 120px;
-            overflow-y: auto;
-        }
+        gap: 2px;
     }
+
     .arg-row {
         display: flex;
-        align-items: flex-start;
-        gap: 12px;
-        padding: 6px 10px;
-        border-radius: var(--radius-sm);
+        align-items: baseline;
+        gap: 14px;
         font-size: 0.85rem;
-
-        &.partial {
-            opacity: 0.7;
-        }
+        line-height: 1.7;
     }
+
     .arg-name {
         color: var(--accent);
-        min-width: 80px;
+        min-width: 90px;
         flex-shrink: 0;
         font-weight: 500;
-
-        &:after {
-            content: ':';
-            margin-left: 2px;
-        }
     }
+
     .arg-value {
         color: var(--text-primary);
         word-break: break-word;
         white-space: pre-wrap;
         flex: 1;
+        min-width: 0;
+        max-height: 120px;
+        overflow-y: auto;
 
-        &.streaming {
-            font-family: var(--code-font);
+        &.boxed {
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 10px 14px;
+            font-size: 0.84rem;
         }
     }
-    .no-args {
-        color: var(--text-muted);
-        font-style: italic;
-        text-align: center;
-        padding: 8px;
-        font-size: 0.85rem;
+
+    /* response: content behind a hairline, rows styled identically to args */
+    .response-row {
+        border-top: 1px solid var(--border-color);
+        margin-top: 8px;
+        padding-top: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
     }
-    .args-streaming {
+
+    .raw-response {
         font-family: var(--code-font);
-        padding: 8px 12px;
-        border-radius: var(--radius-sm);
-        word-break: break-all;
+        white-space: pre-wrap;
+        word-break: break-word;
     }
-
-    &.collapsed {
-        .body {
-            max-height: 0;
-            opacity: 0;
-            padding-top: 0;
-            padding-bottom: 0;
-            overflow: hidden;
-        }
-    }
-}
-
-
-
-/* =============================================================================
- *  Tool Response Section - Compact & Clean
- *  ============================================================================= */
-
-.tool-response-section {
-    background: transparent;
 
     .content {
-        font-size: 0.85rem;
-        max-height: 300px;
-        overflow-y: auto;
-        gap: var(--gap);
+        font-size: 0.84rem;
+        line-height: 1.7;
+
+        .content-row {
+            display: flex;
+            line-height: 1.7;
+
+            .value {
+                color: var(--text-primary);
+                font-size: 0.85rem;
+                word-break: break-word;
+                white-space: pre-wrap;
+                flex: 1;
+                min-width: 0;
+                max-height: 120px;
+                overflow-y: auto;
+
+                &.boxed {
+                    border: 1px solid var(--border-color);
+                    border-radius: 8px;
+                    padding: 8px 10px;
+                }
+            }
+        }
+
+        .response-rest {
+            border-top: 1px solid var(--border-color);
+            margin-top: 8px;
+            padding-top: 8px;
+        }
 
         .string {
-            line-height: 1.6;
             white-space: pre-wrap;
             word-break: break-word;
-            border-radius: var(--radius-sm);
             color: var(--text-primary);
         }
 
         .empty {
             font-style: italic;
             color: var(--text-muted);
-            padding: 8px 10px;
-        }
-
-        .summary {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            padding: 2px 8px;
-            border-radius: var(--radius-sm);
-            font-size: 0.8rem;
-            color: var(--text-muted);
-            cursor: pointer;
-            transition: background 0.15s ease;
-
-            .icon {
-                font-size: 0.75rem;
-            }
-
-            .text {
-                color: var(--text-secondary);
-                max-width: 200px;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-            }
         }
 
         .preview-bracket {
@@ -299,31 +192,38 @@
         }
 
         .kv-row {
-            gap: 8px;
-            border-radius: var(--radius-sm);
-            padding: 6px 10px;
+            display: flex;
+            align-items: baseline;
+            gap: 14px;
+            line-height: 1.7;
 
             .key {
                 color: var(--accent);
+                min-width: 90px;
+                flex-shrink: 0;
                 font-weight: 500;
                 font-size: 0.85rem;
-                flex-shrink: 0;
-                max-width: 150px;
                 overflow: hidden;
                 text-overflow: ellipsis;
-            }
-
-            .colon {
-                color: var(--text-muted);
-                opacity: 0.4;
             }
 
             .value {
                 color: var(--text-primary);
                 font-size: 0.85rem;
                 word-break: break-word;
+                white-space: pre-wrap;
                 flex: 1;
                 min-width: 0;
+                /* same cap as streaming arg values, plain overflow - no box.
+                   only applies to scalar cells (marked with x-box); nested
+                   row-groups render uncapped */
+                max-height: 120px;
+                overflow-y: auto;
+            }
+
+            .value:not([x-box]) {
+                max-height: none;
+                overflow: visible;
             }
 
             .nested {
@@ -332,15 +232,20 @@
                 border-left: 1px solid var(--border-color);
             }
 
-            .array-item {
-                display: flex;
-                align-items: flex-start;
-                gap: 8px;
-                padding: 3px 6px;
-                border-radius: var(--radius-sm);
+            /* wrappers for itemized arrays / object rows: plain blocks */
+            .array-rows,
+            .kv-rows {
+                display: block;
             }
 
-            .index {
+            .value.boxed {
+                border: 1px solid var(--border-color);
+                border-radius: 8px;
+                padding: 8px 10px;
+            }
+
+            /* array indices: small muted number in the key column */
+            .key.index {
                 color: var(--text-muted);
                 font-size: 0.7rem;
                 font-weight: 500;
@@ -351,7 +256,6 @@
             .truncated {
                 color: var(--text-muted);
                 font-size: 0.75rem;
-                padding: 4px 6px;
                 font-style: italic;
                 opacity: 0.8;
             }
@@ -363,12 +267,9 @@
  *  Tool Processing Indicator
  *  ============================================================================= */
 
-
 .tool-processing-indicator {
     animation: processingFadeIn 0.2s ease-out;
 }
-
-
 
 .tool-processing-content {
     position: relative;
@@ -408,8 +309,6 @@
     filter: drop-shadow(0 0 4px var(--accent-glow));
 }
 
-
-
 .tool-processing-text {
     font-size: 0.9rem;
     color: var(--text-secondary);
@@ -423,24 +322,22 @@
     animation: textShimmer 3s linear infinite;
 }
 
-
-
 /* The container for the bar */
 .tool-progress-bar {
     height: 6px;
     border-radius: var(--radius-sm);
     overflow: hidden;
-    display: flex; /* Or block */
+    display: flex;
     align-items: center;
     box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5);
     margin-bottom: 4px;
-    width: 100%; /* Forces it to break the line inside inline-flex */
+    width: 100%;
 }
 
 /* The filling animation */
 .tool-progress-bar-fill {
     height: 100%;
-    width: 0%; /* Start at 0% */
+    width: 0%;
     background: var(--accent);
     border-radius: inherit;
     transition: width 0.1s ease-out;
@@ -454,5 +351,3 @@
     color: var(--accent);
     margin-left: 4px;
 }
-
-

@@ -1,18 +1,15 @@
-<div x-show="$store.ui.currentModal === 'settings'" x-cloak>
-    <div class="settings-modal modal" x-data="settingsModal()">
+<template x-if="$store.ui.currentModal === 'settings'" x-cloak>
+    <div class="settings-modal modal" x-data="settingsModal()"
+        @resize.window.debounce.150ms="checkMobile()"
+        @theme-changed.window="themeFamily = $event.detail.family; themeMode = $event.detail.mode">
+
         <div class="header">
             <h2 id="title">Settings</h2>
-            <button class="close" @click="closeAndSave()" aria-label="Close settings">×</button>
-        </div>
-
-        <!-- Error State -->
-        <div x-show="error" class="settings-error">
-            <span x-text="error"></span>
-            <button @click="load()">Retry</button>
+            <button class="close" @click="close()" aria-label="Close settings">×</button>
         </div>
 
         <!-- Settings Content -->
-        <div class="body" x-show="!error">
+        <div class="body" x-show="!$store.settings.error">
             <!-- SIDEBAR NAV -->
             {% include 'modals/settings/sidebar.html' %}
 
@@ -24,7 +21,7 @@
                 </div>
 
                 <template x-if="!$store.settings.loading">
-                    <div class="content">
+                    <div class="content">                        
                         <!-- Mobile: show category list when no category selected -->
                         <template x-if="mobile && !activeCategory">
                             <div class="mobile-category-list">
@@ -36,11 +33,24 @@
                             </div>
                         </template>
 
+                        <!-- Errors -->
+                        <div class="save-error" x-show="$store.settings.saveError" x-cloak>
+                            <span x-text="$store.settings.saveError"></span>
+                        </div>
+                        
+                        <div x-show="$store.settings.error" class="error">
+                            <span x-text="$store.settings.error"></span>
+                            <button @click="$store.settings.load()">Retry</button>
+                        </div>
+                        
                         <!-- MODULES CONTENT -->
                         {% include 'modals/settings/modules.html' %}
 
                         <!-- CHANNELS CONTENT -->
                         {% include 'modals/settings/channels.html' %}
+
+                        <!-- YOUR SKILLS CONTENT -->
+                        {% include 'modals/settings/module_library.html' %}
 
                         <!-- APPEARANCE (special theme section) -->
                         {% include 'modals/settings/appearance.html' %}
@@ -53,10 +63,12 @@
 
                         <!-- SYSTEM LOGS -->
                         {% include 'modals/settings/logs.html' %}
+
+                        {{ extension_slot("settings_page") }}
                         
                         <!-- ALL OTHER $store.settings.categories (core and so on) -->
                         <template x-if="!activeModule && !activeChannel && 
-                                         !['appearance', 'audio', 'modules', 'user_modules', 'channels', 'user_channels', 'system_prompt', 'system_logs'].includes(activeCategory) && 
+                                         !['appearance', 'audio', 'modules', 'user_modules', 'channels', 'user_channels', 'your_skills', 'system_prompt', 'system_logs'].includes(activeCategory) && 
                                          activeCategory">
                             <div class="section">
                                 <h3 class="section-title" x-text="$store.settings.categories[activeCategory].title"></h3>
@@ -64,18 +76,22 @@
                                 
                                 <template x-for="hierarchyItem in getHierarchicalSettings()" :key="hierarchyItem.key">
                                     <template x-if="!hierarchyItem.setting.unsafe || $store.settings.showUnsafe">
-                                        <div class="setting-item setting-parent" :class="{ 'unsafe': hierarchyItem.setting.unsafe }" x-show="checkDependency(hierarchyItem.setting.depends)" x-data="{ setting: hierarchyItem.setting }">
+                                        <template x-if="checkDependency(hierarchyItem.setting.depends)">
+                                        <div class="setting-item setting-parent" :class="{ 'unsafe': hierarchyItem.setting.unsafe }" x-data="{ setting: hierarchyItem.setting }">
                                             {% include 'modals/settings/fields.html' %}
                                             
                                             <!-- Render dependent children -->
                                             <template x-for="child in hierarchyItem.children" :key="child.key">
                                                 <template x-if="!child.setting.unsafe || $store.settings.showUnsafe">
-                                                    <div class="setting-item setting-child" :class="{ 'unsafe': child.setting.unsafe }" x-show="checkDependency(child.setting.depends)" x-data="{ setting: child.setting }">
+                                                    <template x-if="checkDependency(child.setting.depends)">
+                                                    <div class="setting-item setting-child" :class="{ 'unsafe': child.setting.unsafe }" x-data="{ setting: child.setting }">
                                                         {% include 'modals/settings/fields.html' %}
                                                     </div>
+                                                    </template>
                                                 </template>
                                             </template>
                                         </div>
+                                        </template>
                                     </template>
                                 </template>
                             </div>
@@ -85,5 +101,29 @@
             </main>
 
         </div>
+
+        <div class="settings-footer">
+            <span class="unsaved" x-show="$store.settings.hasChanges">Unsaved changes</span>
+            <div class="footer-buttons">
+                <button type="button" class="footer-btn reset"
+                        @click="$store.settings.resetChanges()"
+                        title="Revert all settings to the values from the last save. This does NOT restore the original defaults."
+                        :disabled="!$store.settings.hasChanges || $store.settings.loading">Revert</button>
+                <button type="button" class="footer-btn save"
+                        @click="$store.settings.saveSettings()"
+                        :disabled="!$store.settings.hasChanges || $store.settings.loading">Save</button>
+            </div>
+        </div>
+
+        <div class="close-prompt" x-show="showClosePrompt" x-cloak @click.self="showClosePrompt = false">
+            <div class="prompt-box">
+                <p class="prompt-text">You have unsaved changes. Save before closing?</p>
+                <div class="prompt-buttons">
+                    <button type="button" class="prompt-btn save" @click="saveAndClose()">Save</button>
+                    <button type="button" class="prompt-btn danger" @click="closeWithoutSaving()">Don't save</button>
+                    <button type="button" class="prompt-btn" @click="showClosePrompt = false">Cancel</button>
+                </div>
+            </div>
+        </div>
     </div>
-</div>
+</template>

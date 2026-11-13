@@ -1,0 +1,15 @@
+{% set slot_above = extension_slot("above_message") %}
+{% set slot_below = extension_slot("below_message") %}
+<template x-if="$store.chat.turnHistory.length === 0 && !$store.stream.turn.steps">
+    <div class="welcome-panel">
+        {{ slot_above }}
+
+        {% if not (slot_above | trim or slot_below | trim) %}
+        {% include 'svg/sparkle.svg' %}
+        <h2 class="welcome-title">Hello there!</h2>
+        <p class="welcome-hint">Say hi, ask me anything, or let's plan something together.</p>
+        {% endif %}
+
+        {{ slot_below }}
+    </div>
+</template>

@@ -4,13 +4,18 @@ SETTINGS_STORE = {
     apiError: false,
     
     // --- Settings Data ---
-    settings: {},
     originalCategories: {},
     changedModuleSettings: new Set(),
     categories: {},
 
     activeCategory: null,
     loading: false,
+
+    // --- Error State ---
+    // error: full-page load failure | saveError: dismissible banner at the
+    // top of the settings page, fed by the server's refusal messages
+    error: null,
+    saveError: null,
     
     // --- Feature Flags ---
     showUnsafe: false,
@@ -18,7 +23,6 @@ SETTINGS_STORE = {
     // --- Model Cache ---
     cachedModels: null,
     modelsLoadError: null,
-    moduleInfoCache: {},
 
     systemPrompt: '',
     
@@ -32,18 +36,44 @@ SETTINGS_STORE = {
             .sort(([a, catA], [b, catB]) => (catA.order || 0) - (catB.order || 0));
     },
 
-    get filteredSubItems() {
-        return (cat) => {
+    get groupedSubItems() {
+        return (cat, enabledOnly = false) => {
             const catData = this.categories[cat];
             if (!catData || !catData.enabled) return [];
-            return catData.enabled.filter(item => 
-                this.showUnsafe || !catData.unsafeModules[item]
+
+            const moduleCategories = catData.moduleCategories || {};
+            const pool = enabledOnly ? [...catData.enabled] : [...catData.enabled, ...catData.disabled];
+            const visible = pool.filter(item =>
+                this.showUnsafe || !(catData.unsafeModules || {})[item]
             );
+
+            const groups = {};
+            for (const item of visible) {
+                const label = moduleCategories[item] || "Other";
+                if (!groups[label]) groups[label] = [];
+                groups[label].push(item);
+            }
+
+            const sorted = Object.entries(groups).sort(([a], [b]) => {
+                if (a === "Other") return 1;
+                if (b === "Other") return -1;
+                return a.localeCompare(b);
+            });
+
+            const hideLabels = sorted.length === 1 && sorted[0][0] === "Other";
+            return sorted.map(([label, items]) => ({
+                label: hideLabels ? "" : label,
+                items
+            }));
         };
     },
 
     // --- Init & Load ---
     async init() {
+        // admin lockdown: the settings endpoints are blocked server-side,
+        // so skip loading them entirely instead of erroring on 403s.
+        if (window.ADMIN_SETTINGS_DISABLED) return;
+
         await this.load();
         await this.checkApiConnection();
     },
@@ -51,22 +81,16 @@ SETTINGS_STORE = {
     async load() {
         this.loading = true;
         this.error = null;
+        this.saveError = null;
 
         try {
-            const rawSettings = await simpleApiFetch('/api/settings/load');
-            this.settings = rawSettings;
-            
-            try {
-                this.moduleInfoCache = await simpleApiFetch('/api/settings/get_module_info');
-            } catch (infoErr) {
-                console.warn('Failed to fetch module info:', infoErr);
-            }
+            const payload = await simpleApiFetch('/api/settings/load');
 
-            this.categories = buildSettingsStructure(rawSettings, this.moduleInfoCache);
+            this.categories = payload.categories;
             this.originalCategories = JSON.parse(JSON.stringify(this.categories));
             this.changedModuleSettings.clear();
 
-            this.showUnsafe = this.settings.channels.settings.webui.show_unsafe_settings;
+            this.showUnsafe = payload.show_unsafe_settings;
 
             this.systemPrompt = await simpleApiFetch("/api/chat/prompt");
 
@@ -83,6 +107,10 @@ SETTINGS_STORE = {
         // get API connection status
         try {
             this.apiStatus = await simpleApiFetch("/api/check_connection");
+
+            if (this.apiStatus) {
+                this.modelsLoadError = null;
+            }
         } catch (e) {
            this.apiStatus = false;
         }
@@ -108,27 +136,19 @@ SETTINGS_STORE = {
     async saveSettings() {
         this.loading = true;
         this.error = null;
+        this.saveError = null;
 
         console.log("saving settings to server..");
 
         try {
-            const backendData = flattenForBackend(this.categories);
-            backendData.changed_modules = Array.from(this.changedModuleSettings);
-
-            await simpleApiPost('/api/settings/save', backendData);
+            const result = await simpleApiPost('/api/settings/save', {
+                categories: JSON.parse(JSON.stringify(this.categories)),
+                changed_modules: Array.from(this.changedModuleSettings)
+            });
 
             // restart server if enabled modules/channels changed
-            if (
-                (JSON.stringify(this.categories.modules.enabled) !== JSON.stringify(this.originalCategories.modules.enabled))
-                ||
-                (JSON.stringify(this.categories.user_modules.enabled) !== JSON.stringify(this.originalCategories.user_modules.enabled))
-                ||
-                (JSON.stringify(this.categories.channels.enabled) !== JSON.stringify(this.originalCategories.channels.enabled))
-                ||
-                (JSON.stringify(this.categories.user_channels.enabled) !== JSON.stringify(this.originalCategories.user_channels.enabled))
-            ) {
+            if (result?.requires_restart) {
                 console.log("restarting server..");
-                this.settings = backendData;
                 this.originalCategories = JSON.parse(JSON.stringify(this.categories));
                 this.changedModuleSettings.clear();
 
@@ -137,9 +157,7 @@ SETTINGS_STORE = {
             }
 
             // Reconnect API if API settings changed
-            else if (
-                (JSON.stringify(this.categories.api) !== JSON.stringify(this.originalCategories.api))
-            ) {
+            else if (result?.requires_reconnect) {
                 try {
                     console.log("reconnecting API");
                     await simpleApiPost('/api/reconnect', {});
@@ -150,7 +168,6 @@ SETTINGS_STORE = {
                 }
             }
 
-            this.settings = backendData;
             this.originalCategories = JSON.parse(JSON.stringify(this.categories));
 
             // re-fetch system prompt
@@ -162,10 +179,33 @@ SETTINGS_STORE = {
 
             this.changedModuleSettings.clear();
         } catch (err) {
-            this.error = err.message || 'Failed to save settings';
+            this.saveError = (err && err.message) ? err.message : (err || 'Failed to save settings');
         } finally {
             this.loading = false;
         }
+    },
+
+    resetChanges() {
+        const restore = (target, source) => {
+            for (const key of Object.keys(target)) {
+                if (!(key in source)) continue;
+                const t = target[key];
+                const s = source[key];
+                const bothObj = t && s && typeof t === 'object' && typeof s === 'object';
+                if (bothObj && !Array.isArray(t) && !Array.isArray(s)) {
+                    restore(t, s);
+                } else if (t !== s) {
+                    // deep-copy so later edits never touch the snapshot
+                    target[key] = (s && typeof s === 'object') ? JSON.parse(JSON.stringify(s)) : s;
+                }
+            }
+        };
+        restore(this.categories, this.originalCategories);
+
+        this.changedModuleSettings.clear();
+        this.error = null;
+        this.saveError = null;
+        this.apiError = null;
     },
 
     toggleEnabled(category, itemName) {

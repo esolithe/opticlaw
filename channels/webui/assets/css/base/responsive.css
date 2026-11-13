@@ -28,9 +28,13 @@
         height: -webkit-fill-available;
     }
 
-    /* main-wrapper was using 100vh, which clips on mobile */
-    #main-wrapper {
+    /* main-wrapper was using 100vh, which clips on mobile. now that #main
+       is the page column, the viewport height lives there */
+    #main {
         height: 100dvh;
+    }
+
+    #main-wrapper {
         gap: 0;
     }
 
@@ -62,42 +66,34 @@
         bottom: 0;
         z-index: 100;
         box-shadow: var(--shadow-strong);
-        min-width: 50%;
+
+        /* full-width overlay on mobile */
+        flex: 0 0 100% !important;
+        min-width: 0 !important;
+        max-width: 100% !important;
         width: 100% !important;
         overflow: hidden;
 
-        /* Both panes stack full-width, slide relative to each other */
-        #category-list,
         #chat-list {
             top: 0;
             left: 0;
             width: 100%;
             height: 100%;
-        }
 
-        .cat-enter-from { transform: translateX(-100%); }
-        .cat-leave-to   { transform: translateX(-100%); }
+            .chats {
+                gap: 12px;
 
-        .chat-enter-from { transform: translateX(100%); }
-        .chat-leave-to   { transform: translateX(100%); }
+                .day-chats {
+                    gap: 2px;
+                }
 
-        .header-btn {
-            width: 100%;
-            padding: 14px 16px;
-            background: transparent;
-            border: none;
-            border-bottom: 1px solid var(--border-sidebar);
-            color: var(--text-primary);
-            font-size: 1rem;
-            font-weight: 600;
-            cursor: pointer;
-            text-align: left;
-            transition: background 0.2s ease;
-
-            &:hover {
-                background: var(--bg-tertiary);
+                .item {
+                    min-height: 44px;
+                    box-sizing: border-box;
+                }
             }
         }
+
     }
 
     /* Header — constrained so it doesn't push content off-screen */

@@ -22,15 +22,39 @@ document.addEventListener('alpine:init', async () => {
     await Alpine.store('notifications').init();
 
     // defined in directives/
-    Alpine.directive('auto-scroll', autoScroll);
-    Alpine.directive('copy-code', copyCode);
+    
+    // pass Alpine's cleanup hook through, otherwise the teardown fn returned by
+    // autoScroll() is ignored and scroll listeners + MutationObservers leak per element
+    Alpine.directive('auto-scroll', (el, modifiers, { cleanup }) => cleanup(autoScroll(el)));
+    Alpine.directive('md', markdownRender);
+
+    // x-text / x-html variants that fade newly streamed content in
+    // (reasoning, tool call args, tool responses)
+    Alpine.directive('fade-text', Alpine.skipDuringClone(fadeTextRender));
+    Alpine.directive('fade-html', Alpine.skipDuringClone((el, d, c) => fadeTextRender(el, d, c, true)));
+
+    // toggles .boxed when an element's content overflows its max-height,
+    // so tool call values only get the soft background when they scroll
+    Alpine.directive('box', (el, modifiers, { cleanup }) => cleanup(boxIfScrolls(el)));
 
     self.notice = "Please wait, connecting to backend server..";
     await connectWebSocket();
 
     // register the service worker
     if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('/sw.js');
+        // updateViaCache 'none': always revalidate sw.js itself, so an
+        // update check can never be answered from the HTTP cache
+        navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' });
+
+        if (navigator.serviceWorker.controller) {
+            let swReloadDone = false;
+            navigator.serviceWorker.addEventListener('controllerchange', () => {
+                if (swReloadDone) { return; }
+                swReloadDone = true;
+                console.log('Service worker updated: reloading for fresh assets..');
+                window.location.reload();
+            });
+        }
     }
 
     // check if we're on a phone

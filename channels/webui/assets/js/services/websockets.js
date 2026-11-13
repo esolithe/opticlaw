@@ -2,9 +2,19 @@ let isWsConnected = false;
 let wsReconnecting = false;
 let responseSoundPlayed = false;
 
+let serverShutdownSeen = false;
+let wsClosedAt = null;
+
+let wsHeartbeatTimer = null;
+window.wsLastRx = Date.now();
+
 // intended to be used to queue up messages for sending to the backend in case the
 // websocket isn't connected. it's a stub for now
 let sendQueue = [];
+
+let streamFinalizing = false;
+
+
 
 async function connectWebSocket() {
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -31,26 +41,61 @@ async function connectWebSocket() {
         Alpine.store('ui').notice = null;
         isWsConnected = true;
         wsReconnecting = false;
+
+        // the server came back after having gone away: reload the page
+        const downFor = wsClosedAt ? Date.now() - wsClosedAt : 0;
+        wsClosedAt = null;
+        if (serverShutdownSeen || Alpine.store('system').restarting || downFor > 2500) {
+            window.location.reload();
+            return;
+        }
+
+        // start the app-level heartbeat (server answers {type:"pong"}
+        clearInterval(wsHeartbeatTimer);
+        wsHeartbeatTimer = setInterval(() => {
+            if (wsSocket && wsSocket.readyState === WebSocket.OPEN) {
+                try { wsSocket.send(JSON.stringify({ type: "ping" })); } catch (e) {}
+            }
+        }, 25000);
+
         await Alpine.store("chat").reloadChat();
     };
 
     wsSocket.onmessage = async (event) => {
+        let data = null;
+        window.wsLastRx = Date.now();
         try {
-            const data = JSON.parse(event.data);
+            data = JSON.parse(event.data);
             await handleWebSocketMessage(data);
         } catch (e) {
             console.error('Error parsing WebSocket message:', e);
+        } finally {
+            if (data && data.type === 'stream_complete') {
+                streamFinalizing = false;
+            }
         }
     };
 
     wsSocket.onclose = async (event) => {
         if (!wsReconnecting) {
-            console.log('WebSocket disconnected:', event.code, event.reason);
+            clearInterval(wsHeartbeatTimer);
+            const silence = Math.round((Date.now() - window.wsLastRx) / 1000);
+            console.log('WebSocket disconnected:', event.code, event.reason, `(silent for ${silence}s before the drop)`);
             wsSocket = null;
             window.socket = null;
             isWsConnected = false;
+            wsClosedAt = Date.now();
 
-            Alpine.store('ui').notice = "Not connected to the backend server! Is OpenLumara running?"
+            let notice = "Not connected to the backend server! Is OpenLumara running?";
+            if (event.code === 4001) {
+                notice = "Login session no longer accepted (expired, or the session secret changed). Log out and back in.";
+            } else if (event.code === 4003) {
+                notice = "WebSocket blocked: origin mismatch. The address in the URL bar does not match the webui's host/port settings.";
+            } else if (event.code === 1012 || event.code === 1011 || event.code === 1006) {
+                notice = "Connection to the backend dropped. Reconnecting..";
+            }
+            notice += " [" + event.code + (event.reason ? ' - ' + event.reason : '') + "]";
+            Alpine.store('ui').notice = notice;
             stream = Alpine.store("stream")
             stream.state = 'idle';
 
@@ -81,12 +126,16 @@ async function handleWebSocketMessage(data) {
     data_type = data.type;
     data_content = data.content;
 
-    if (data_type != 'token' && data_type != "turn_stream") {
-        console.log(data);
-    }
+    // if (data_type != 'token' && data_type != "turn_stream") {
+    //     console.log(data);
+    // }
 
     // process based on broadcast type
     switch (data_type) {
+        case "stream_state":
+            stream.state = data.state;
+            break;
+
         case "sync_state":
             /*
              * use the token buffer from the backend
@@ -103,86 +152,197 @@ async function handleWebSocketMessage(data) {
             break;
 
         case "user_message_added":
+            // keep a reference to the user message so stream_complete can push
+            // it to the turn history without it being null
+            stream.userMsg = data.message;
+
             // reload chat from backend so that the new user message shows up
             await chat.reloadChat();
 
             // force scroll to bottom
             await ui.forceScrollToBottom();
-
-            stream.state = 'message_sending';
             break;
 
         case "user_message_confirmed":
-            stream.state = 'message_received';
             break;
 
-        case "turn_stream":
-            const segment = data.turn;
-
+        case "turn_step":
+        case "turn_final": {
+            // step-based stream
             if (stream.turn.length <= 0) {
-                stream.turn = {role: "assistant", messages: []};
+                while (chat.turnHistory.length > 0 &&
+                       chat.turnHistory[chat.turnHistory.length - 1].role === 'assistant' &&
+                       chat.turnHistory[chat.turnHistory.length - 1].live !== true) {
+                    chat.turnHistory.pop();
+                }
+
+                stream.turn = {role: "assistant", live: true, steps: [], final_messages: []};
+                chat.turnHistory.push(stream.turn);
+                Alpine.store('ui').syncMountWindows();
             }
 
-            // check if this updates the last segment or starts a new one
-            const last_idx = stream.turn.messages.length - 1;
-            const last_segment = stream.turn.messages[last_idx];
+            if (data_type === "turn_step") {
+                const step = data.step;
+                const steps = stream.turn.steps;
+                const stepIdx = steps.findIndex(s => s.step === step.step);
 
-            // same type and same tool_call_id = update existing segment
-            const is_update = last_segment &&
-                              last_segment.type === segment.type &&
-                              last_segment.tool_call_id === segment.tool_call_id;
+                let grew = false;
+                if (stepIdx >= 0) {
+                    const prev = steps[stepIdx];
+                    grew = (step.reasoning_content || '').length !== (prev.reasoning_content || '').length
+                        || (step.content || '').length !== (prev.content || '').length;
+                    Object.assign(prev, step);
+                } else {
+                    steps.push(step);
+                    steps.sort((a, b) => a.step - b.step);
+                    grew = true;
+                }
 
-            if (is_update) {
-                // backend sends FULL accumulated content, so replace in place
-                stream.turn.messages[last_idx] = segment;
+                if (grew) {
+                    stream.processing = {};
+                    stream.modelLoad = null;
+                    AudioManager.stopProcessingSound();
+                    AudioManager.play("token");
+                    if (!responseSoundPlayed) {
+                        AudioManager.play("response_start");
+                        responseSoundPlayed = true;
+                    }
+                }
+
+                if (step.is_cmd) {
+                    await chat.reloadChats();
+                    await chat.reloadCategories();
+                }
             } else {
-                // new segment type (or new tool response), push it
-                stream.turn.messages.push(segment);
+                // authoritative final snapshot: replace wholesale, the
+                // empty list is a retract (content slid back into the chain)
+                stream.turn.final_messages = data.messages || [];
+
+                if (stream.turn.final_messages.length > 0) {
+                    stream.processing = {};
+                    stream.modelLoad = null;
+                    AudioManager.stopProcessingSound();
+                    AudioManager.play("token");
+                    if (!responseSoundPlayed) {
+                        AudioManager.play("response_start");
+                        responseSoundPlayed = true;
+                    }
+                }
+
+                if (stream.turn.final_messages.some(m => m.is_cmd)) {
+                    await chat.reloadChats();
+                    await chat.reloadCategories();
+                }
             }
 
             // scroll
             await ui.scrollToBottom();
+            break;
+        }
 
-            // handle state based on the current segment
-            const current_segment = stream.turn.messages[stream.turn.messages.length - 1];
-            const segment_type = current_segment.type;
+        case "turn_step_delta": {
+            // deltas are used for reasoning and content,
+            // but the stream frequently re-syncs by receiving the full step content so far
+            // in the turn_step event
+            // 
+            // we use deltas here so that the network isn't constantly sending
+            // huge objects that contain all step data..
+            // instead the full step data only gets sent every 128 tokens
+            // 
+            // this is required for the stream not to bog down,
+            // and it saves tremendously on network use
+            const delta = data.delta;
+            if (!delta || stream.turn.length <= 0) break;
 
-            switch (segment_type) {
-                case "reasoning":
-                    stream.state = 'thinking';
-                    stream.processing = {};
-                    AudioManager.stopProcessingSound();
-                    AudioManager.play("token");
-                    if (!responseSoundPlayed) {
-                        AudioManager.play("response_start");
-                        responseSoundPlayed = true;
+            const step = stream.turn.steps.find(s => s.step === delta.step);
+            if (!step) break;
+
+            for (const a of delta.append || []) {
+                if (a.field === "reasoning_content") {
+                    step.reasoning_content = (step.reasoning_content || "") + a.text;
+                } else if (a.field === "tool_response") {
+                    const tool = (step.tool_calls || []).find(t => t.id === a.id);
+                    if (tool) {
+                        const meta = tool._metadata || (tool._metadata = {});
+                        meta.response = (meta.response || "") + a.text;
                     }
-                    break;
-                case "content":
-                    stream.state = 'streaming';
-                    stream.processing = {};
-                    AudioManager.stopProcessingSound();
-                    AudioManager.play("token");
-                    if (!responseSoundPlayed) {
-                        AudioManager.play("response_start");
-                        responseSoundPlayed = true;
-                    }
-                    break;
+                }
             }
 
-            if (current_segment.is_cmd) {
-                await chat.reloadChats();
-                await chat.reloadCategories();
+            stream.processing = {};
+            stream.modelLoad = null;
+            AudioManager.stopProcessingSound();
+            AudioManager.play("token");
+            if (!responseSoundPlayed) {
+                AudioManager.play("response_start");
+                responseSoundPlayed = true;
             }
 
+            await ui.scrollToBottom();
+            break;
+        }
+
+        case "turn_final_delta": {
+            const delta = data.delta;
+            if (!delta || stream.turn.length <= 0) break;
+
+            const finals = stream.turn.final_messages;
+            const last = finals && finals[finals.length - 1];
+            if (!last) break;
+
+            last.content = (last.content || "") + delta.text;
+
+            stream.processing = {};
+            stream.modelLoad = null;
+            AudioManager.stopProcessingSound();
+            AudioManager.play("token");
+            if (!responseSoundPlayed) {
+                AudioManager.play("response_start");
+                responseSoundPlayed = true;
+            }
+
+            await ui.scrollToBottom();
+            break;
+        }
+
+        case "queue_queued":
+            stream.queued = data.messages ?? [];
+            break;
+
+        case "queue_flushed":
+            (data.messages ?? []).forEach(msg => {
+                const idx = stream.queued.findIndex(q => q.content === msg.content);
+                if (idx !== -1) { stream.queued.splice(idx, 1); }
+            });
+            AudioManager.play("token");
+
+            if (data.end_of_chain) {
+                const hist = chat.turnHistory;
+                if (hist.length > 0 && hist[hist.length - 1]?.live === true) {
+                    // its content comes back from the reloaded history
+                    hist.pop();
+                }
+
+                stream.turn = { role: "assistant", live: true, steps: [], final_messages: [] };
+                await chat.reloadChat();
+                chat.turnHistory.push(stream.turn);
+                stream.userMsg = null;
+                await ui.forceScrollToBottom();
+            }
+            // no scroll needed for mid-chain pops: the queue is pinned
+            // above the input bar
             break;
 
         case "push":
             // it's a push messsage (like a scheduler reminder)
-            chat.turnHistory.push(data.content);
+            if (stream.state !== 'idle' || streamFinalizing) {
+                await AudioManager.play('response_start');
+                await Alpine.store('notifications').send(data.content.content);
+                break;
+            }
+
             await chat.reloadChat();
 
-            console.log(data.content);
             await AudioManager.play('response_start');
             await Alpine.store('notifications').send(data.content.content);
 
@@ -190,7 +350,10 @@ async function handleWebSocketMessage(data) {
             break;
 
         case "log":
-            Alpine.store('system').logs.push(data);
+            // cap the log buffer so a chatty backend can't grow it forever
+            const logs = Alpine.store('system').logs;
+            logs.push(data);
+            if (logs.length > 1000) logs.splice(0, 500);
             break;
 
         case "ready":
@@ -204,6 +367,7 @@ async function handleWebSocketMessage(data) {
 
         case "shutdown":
             sys = Alpine.store("system")
+            serverShutdownSeen = true;
             if (!sys.restarting) {
                 sys.message = "Server is down! Trying to reconnect..";
                 sys.running = false;
@@ -218,20 +382,26 @@ async function handleWebSocketMessage(data) {
             // process tokens based on their type
             switch (token_type) {
                 case "error":
-                    // force a refresh
+                    stream.modelLoad = null;
+                    // restore the user's last input
+                    if (!chat.user_input && chat.last_user_input) {
+                        chat.user_input = chat.last_user_input;
+                    }
                     await chat.reloadChat();
                     break;
                 case "tool":
-                    stream.state = 'processing_tools';
                     AudioManager.playProcessingSound();
                     break;
                 case "prompt_progress":
-                    if (stream.state != "processing_tools") {
-                        // let it stay in that state if it's been set
-                        stream.state = 'processing';
-                    }
+                    // prompt eval started, so any model-load progress is done
+                    stream.modelLoad = null;
 
                     stream.processing = token_content;
+
+                    AudioManager.playProcessingSound();
+                    break;
+                case "model_load_progress":
+                    stream.modelLoad = token_content;
 
                     AudioManager.playProcessingSound();
                     break;
@@ -239,17 +409,23 @@ async function handleWebSocketMessage(data) {
                     chat.currentTokenUsage = token_content;
                     break;
                 case "tool_call_delta":
-                    stream.state = 'calling_tools';
                     stream.processing = {};
+                    stream.modelLoad = null;
                     break;
                 case "tool_calls":
-                    stream.state = 'calling_tools';
                     break;
             }
 
             // always scroll to the bottom upon a token coming in
             await ui.scrollToBottom();
 
+            break;
+
+        case "token_usage":
+            chat.currentTokenUsage = data.content;
+            break;
+        case "context_size":
+            chat.contextBreakdown = data.content;
             break;
 
         case "sync":
@@ -261,9 +437,15 @@ async function handleWebSocketMessage(data) {
             if (ui.scrollToTurnIndex) {
                 await ui.scrollToTurn(ui.scrollToTurnIndex);
             } else {
-                await ui.scrollToBottom();
+                await ui.forceScrollToBottom();
             }
 
+            break;
+
+        case "refresh_page":
+            // -- AI GENERATED CODE (Qwen3-Coder Next) :: (11-06-2026) harness:openlumara
+            // webui settings changed on the server: reload so they apply
+            window.location.reload();
             break;
 
         case "chat_switched":
@@ -276,22 +458,75 @@ async function handleWebSocketMessage(data) {
              * this prevents UI flicker that comes from re-rendering the entire turn history
              */
 
-            // push the user message + the fully collected assistant turn to the history
-            chat.turnHistory.push({"role": "user", "messages": [stream.userMsg]});
-            chat.turnHistory.push(stream.turn);
-            
+            streamFinalizing = true;
+
+            const foldEl = document.querySelector('.agent-chain.is-streaming .agent-chain-body');
+            if (foldEl && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                const foldMsgs = document.getElementById('messages');
+                foldEl.style.overflow = 'hidden';
+                const fold = foldEl.animate(
+                    [{ height: foldEl.offsetHeight + 'px' }, { height: '0px' }],
+                    { duration: 250, easing: 'ease-in-out', fill: 'forwards' }
+                );
+                let foldCancelled = false;
+                const cancelFoldPin = () => { foldCancelled = true; };
+                foldMsgs.addEventListener('wheel', cancelFoldPin, { passive: true });
+                foldMsgs.addEventListener('touchstart', cancelFoldPin, { passive: true });
+                const pinBottom = () => {
+                    if (foldCancelled || !ui.shouldScroll) return;
+                    foldMsgs.scrollTo({ top: foldMsgs.scrollHeight - foldMsgs.clientHeight, behavior: 'instant' });
+                    if (fold.playState === 'running') requestAnimationFrame(pinBottom);
+                };
+                requestAnimationFrame(pinBottom);
+                try { await fold.finished; } catch (err) { /* cancelled or gone: fine */ }
+                foldMsgs.removeEventListener('wheel', cancelFoldPin);
+                foldMsgs.removeEventListener('touchstart', cancelFoldPin);
+            }
+
+            const hist = chat.turnHistory;
+            const hasLiveTail = hist.length > 0 && hist[hist.length - 1] && hist[hist.length - 1].live === true;
+            const lastTurn = hist[hist.length - 1 - (hasLiveTail ? 1 : 0)];
+            const userAlreadyShown = lastTurn && lastTurn.role === 'user' &&
+                stream.userMsg && lastTurn.messages?.[0]?.index === stream.userMsg.index;
+
+            if (!userAlreadyShown && stream.userMsg) {
+                const userTurn = {"role": "user", "messages": [stream.userMsg]};
+                if (hasLiveTail) hist.splice(hist.length - 1, 0, userTurn);
+                else hist.push(userTurn);
+            }
+
+            (stream.turn.steps ?? []).forEach(s => {
+                s.reasoning_live = false;
+                s.is_tail = false;
+                if (s.status === 'thinking' && (!s.tool_calls || s.tool_calls.length === 0)) {
+                    s.status = 'thoughts';
+                }
+                if (s.label === 'Thinking..') {
+                    s.label = 'Thoughts';
+                }
+            });
+
+            if (hist.length > 0 && hist[hist.length - 1] && hist[hist.length - 1].live === true) {
+                stream.turn.live = false;
+            } else {
+                chat.turnHistory.push(stream.turn);
+            }
+
+            Alpine.store('ui').syncMountWindows();
+
             // then clear the user message placeholder and the current turn
             await stream.clear();
 
             // finalize the stream
+            responseSoundPlayed = false;
             AudioManager.play("completion");
-            await ui.scrollToBottom();
+            await ui.scrollToBottom('messages');
 
             // and finally, sync back up with the backend
             await chat.reloadChat();
             await chat.reloadChats();
 
-            stream.state = 'idle';
+            await ui.scrollToBottom('messages');
 
             break;
     }

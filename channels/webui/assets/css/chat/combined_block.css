@@ -1,0 +1,317 @@
+/* merged reasoning + content + tool calls: one collapsible header per
+   agentic step, marked by a numbered filled circle + the tool names.
+   header mirrors the reasoning header metrics so the timeline node dots
+   line up across all chain stations. */
+.combined-block {
+    width: 100%;
+    /* anchor for the timeline node-dot */
+    position: relative;
+    font-size: 0.85rem;
+
+    .header {
+        display: flex;
+        align-items: center;
+        gap: 0.35em;
+        color: var(--text-secondary);
+        min-height: 1.36rem;
+        cursor: pointer;
+        user-select: none;
+        border-radius: var(--radius-sm);
+        transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1),
+                    background-color 0.2s ease;
+
+        svg {
+            flex-shrink: 0;
+        }
+
+        .text {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            /* the names span needs the flex box itself to be shrinkable,
+               or the ellipsis never kicks in */
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+        }
+
+        /* deduped tool names: shrinkable, hard single line, ellipsis eats
+           the overflow so the header never exceeds its width */
+        .tool-names {
+            font-size: 0.92em;
+            flex: 0 1 auto;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+
+            /* module names bold, matching the tool call header's .module */
+            .tool-module {
+                font-weight: 600;
+            }
+
+            .module-group {
+                white-space: nowrap;
+            }
+
+            .module-group + .module-group::before {
+                content: ' · ';
+            }
+
+            /* repeat badge for functions called multiple times in one
+               step: "Coder: file edit x3" */
+            .tool-repeat {
+                font-size: 0.85em;
+                opacity: 0.7;
+                margin-left: 1px;
+            }
+        }
+
+        /* arg summary for single-call steps, mirrors .call-args in the card
+           header: sits right after the tool names */
+        .step-args {
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            opacity: 0.8;
+            font-family: var(--code-font);
+            flex: 0 1 auto;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* registry result summary for single-call steps, mirrors the card
+           header's .call-result hint */
+        .step-summary {
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            opacity: 0.8;
+            flex: 0 0 auto;
+            white-space: nowrap;
+        }
+
+        .thought-header {
+            display: flex;
+            align-items: center;
+            gap: 0.6em;
+            flex: 1;
+            min-width: 0;
+        }
+
+        .step-thought {
+            font-size: 0.92em;
+            flex: 1 1 auto;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .step-modules {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5em;
+            flex: 0 0 auto;
+            margin-left: auto;
+            font-size: 0.75em;
+            opacity: 0.75;
+
+            .module-chip {
+                white-space: nowrap;
+            }
+
+            .module-chip + .module-chip::before {
+                content: ' · ';
+                opacity: 0.6;
+            }
+
+            .module-action + .module-action::before {
+                content: ', ';
+            }
+
+            .action-count {
+                margin-left: 2px;
+                opacity: 0.75;
+                font-size: 0.9em;
+            }
+        }
+
+        .bare-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+        }
+    }
+
+    .header:hover {
+        filter: brightness(1.03);
+    }
+
+    .block {
+        border-radius: 0px 0px var(--radius-sm) var(--radius-sm);
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        margin-top: 4px;
+        margin-bottom: 4px;
+    }
+
+    /* thoughts get their own row inside the step: bubble icon + text */
+    .reasoning-row {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        color: var(--text-secondary);
+        width: 100%;
+
+        .icon {
+            width: 1.18em;
+            height: 1.18em;
+            flex-shrink: 0;
+            /* align the bubble with the first text line */
+            margin-top: 0.15em;
+        }
+
+        .reasoning-text {
+            flex: 1;
+            min-width: 0;
+        }
+    }
+
+    /* intermediate content riding along with the step (model narration) */
+    .step-content {
+        font-size: 0.9rem;
+        color: var(--text-secondary);
+    }
+
+    /* thoughts text: de-emphasized vs the step header content - muted and
+       a notch smaller than the reasoning body elsewhere */
+    .reasoning-text {
+        max-height: 120px;
+        overflow-y: auto;
+        padding: 0px 2px;
+        font-size: 0.78rem;
+        color: var(--text-secondary);
+        white-space: pre-wrap;
+        word-break: break-word;
+        line-height: 1.6;
+    }
+
+    /* tool cards live inside the block */
+    .agent-chain .combined-block .tool-call-card .node-dot {
+        display: none;
+    }
+
+    .dots {
+        display: inline-flex;
+        gap: 3px;
+        flex-shrink: 0;
+
+        span {
+            display: inline-block;
+            width: 4px;
+            height: 4px;
+            background: currentColor;
+            border-radius: 50%;
+            opacity: 0;
+        }
+    }
+
+    /* live thinking pulse */
+    .dots span {
+        opacity: 1;
+        animation: reasoningDot 1.5s ease-in-out infinite;
+    }
+
+    .dots span:nth-child(1) { animation-delay: 0s; }
+    .dots span:nth-child(2) { animation-delay: 0.2s; }
+    .dots span:nth-child(3) { animation-delay: 0.4s; }
+}
+
+.agent-chain .combined-block > .node-dot {
+    width: 0.6em;
+    height: 0.6em;
+    /* recenter the smaller dot on the spine (was sized for 1em). the
+       -0.5px splits the difference between the dot rendering 1px right
+       at 0px and 1px left at -1px (subpixel rounding between the 1px
+       line and the dot box) */
+    left: calc(-1.27em - 0.5px);
+    top: 0.5em;
+    border: none;
+    /* muted via a SOLID mixed color, never element opacity: opacity would
+       fade the masking ring too and the spine would shine through the dot */
+    background: var(--text-secondary);
+    background: color-mix(in srgb, var(--text-secondary) 45%, var(--bg-primary));
+    transition: transform 0.15s ease;
+}
+
+/* finished dots always rest in the muted secondary - the live step is
+   the ONLY accent dot on the rail, streaming turn or not */
+.agent-chain .combined-block > .node-dot.dot-done {
+    background: var(--text-secondary);
+}
+
+.combined-block > .header .text {
+    opacity: 0.55;
+    transition: opacity 0.15s ease;
+}
+
+.combined-block > .header:hover .text {
+    opacity: 1;
+}
+
+/* the live step is by definition the one whose node dot is dot-live -
+   far sturdier than :last-child, which the transient tool-wait station
+   and the finish flag keep stealing from the real live step */
+.agent-chain.is-streaming .combined-block:has(.node-dot.dot-live) > .header .text {
+    opacity: 1;
+}
+
+.agent-chain .combined-block > .node-dot.dot-failed {
+    background: var(--error, #f87171);
+    opacity: 1;
+}
+
+.agent-chain .combined-block > .node-dot.dot-live {
+    background: var(--accent);
+    opacity: 1;
+    /* tiny glow: the station clips its paint, so a fat halo gets sliced
+       at the edges - a tight 3px bloom fits beside the spine */
+    box-shadow: 0 0 3px var(--accent);
+    animation: nodeDotPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes nodeDotPulse {
+    0%, 100% { background-color: var(--text-secondary); }
+    50% { background-color: var(--accent); }
+}
+
+/* in-step tool card chevron: only inside combined blocks - standalone tool
+   stations keep their node dot as the expand affordance */
+.card-chevron {
+    display: none;
+}
+
+.combined-block .card-chevron {
+    display: block;
+    width: 0.85em;
+    height: 0.85em;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+    transition: transform 0.2s ease;
+
+    &.expanded {
+        transform: rotate(90deg);
+    }
+}
+
+/* keep the standalone chevron hidden inside the agent chain (the node dot
+   owns expand/collapse state there), same rule as reasoning */
+.agent-chain .combined-block .standalone-chevron {
+    display: none;
+}

@@ -1,17 +1,36 @@
-<div :class="{'reasoning-wrapper': true, 'collapsed': collapsed, 'expanded': !collapsed}" x-data="{collapsed: !$store.ui.expandReasoning}" @click="collapsed = !collapsed">
+<div :class="{'reasoning-wrapper': true, 'collapsed': collapsed, 'expanded': !collapsed, 'is-reasoning-active': !done}"
+     x-data="{
+             collapsed: $store.stream.state === 'idle' || ['thinking','steps'].includes(localStorage.getItem('stepDisplayMode')),
+             autoCollapsed: false,
+             done: $store.stream.state === 'idle'
+     }"
+     x-effect="
+               const msgs = $store.stream.turn?.messages ?? [];
+               const isLast = msgs[msgs.length - 1] === message;
+               done = $store.stream.state === 'idle' || !isLast; if (done && !autoCollapsed) {
+                   autoCollapsed = true; 
+                   if (!['thinking','steps'].includes(localStorage.getItem('stepDisplayMode'))) {
+               	       collapsed = true;
+                   }
+               }"
+     @click="collapsed = !collapsed">
+    <div class="node-dot" :class="{expanded: !collapsed}">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 6 15 12 9 18"></polyline></svg>
+    </div>
     <div class="header">
+        <svg class="standalone-chevron" :class="{'expanded': !collapsed}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="9 6 15 12 9 18"></polyline>
+        </svg>
         {% include 'svg/thought_bubble.svg' %}
         <span class="text">
-            <!-- TODO: add `Thought` after done thinking -->
-            <span class="label">Thoughts</span>
-            <span class="dots"><span aria-hidden="true">&nbsp;</span><span aria-hidden="true">&nbsp;</span><span aria-hidden="true">&nbsp;</span></span>
+            <span class="label" x-text="done ? 'Thoughts' : 'Thinking..'"></span>
+            <span class="dots" x-show="!done"><span aria-hidden="true">&nbsp;</span><span aria-hidden="true">&nbsp;</span><span aria-hidden="true">&nbsp;</span></span>
         </span>
-        <svg class="toggle" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="6 9 12 15 18 9"></polyline>
-        </svg>
     </div>
 
-    <div class="block" x-show="!collapsed">
-        <div class="content" x-text="message.reasoning_content" x-auto-scroll></div>
+    <div x-show="!collapsed" x-collapse.duration.250>
+        <div class="block">
+            <div class="content" x-fade-text="message.reasoning_content" x-auto-scroll></div>
+        </div>
     </div>
 </div>

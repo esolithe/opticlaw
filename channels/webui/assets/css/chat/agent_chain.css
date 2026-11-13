@@ -1,0 +1,263 @@
+/* collapsible "Process" wrapper around the agentic chain, rendered as a
+   timeline: a spine starts under the header chevron, every chain segment is
+   a station with a node dot on it, and the chain terminates on a finish
+   flag. no per-block left borders or nesting - the spine is the container.
+
+   alignment math (updated 2026-10-12, header chevron removed): the gear is
+   the first header item, 1.18em wide, so its center sits at 0.59em from the
+   left edge of the chain. the body is nudged 0.09em right so the rail line
+   (centered at 0.5em into the rail) lands on that same 0.59em line. */
+/* node dots only exist inside the timeline; outside an agent chain (e.g. a
+   final message that carries reasoning_content) the raw svg would render
+   unstyled at full size, so hide the whole thing there */
+.node-dot {
+    display: none;
+}
+
+.agent-chain {
+    width: 100%;
+    display: inline-block;
+    font-size: 0.85rem;
+
+    .agent-chain-header {
+        display: flex;
+        align-items: center;
+        gap: 0.6em;
+        cursor: pointer;
+        user-select: none;
+        color: var(--text-secondary);
+        border-radius: var(--radius-sm);
+        transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1),
+                    background-color 0.2s ease;
+
+        .label {
+            font-weight: 500;
+        }
+    }
+
+    .agent-chain-header:hover {
+        filter: brightness(1.03);
+    }
+
+    .agent-chain-header.locked {
+        cursor: default;
+
+        &:hover {
+            filter: none;
+        }
+    }
+
+    &.is-streaming .agent-chain-header .gear {
+        animation: gearSpin 9s linear infinite;
+    }
+
+    /* last chain item in parentheses, only shown when collapsed */
+    .activity {
+        color: var(--text-secondary);
+        opacity: 0.75;
+        font-size: 0.95em;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 0;
+        flex: 0 1 auto;
+    }
+
+    .agent-chain-header svg {
+        width: 1.18em;
+        height: 1.18em;
+        flex-shrink: 0;
+    }
+
+    .agent-chain-body {
+        margin-top: 0;
+        margin-left: 0.09em;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .chain-station {
+        display: flex;
+        gap: 1.18em;
+        min-width: 0;
+
+        content-visibility: auto;
+        contain-intrinsic-size: auto 120px;
+    }
+
+    .chain-rail {
+        position: relative;
+        width: 0.3em;
+        flex-shrink: 0;
+
+        &::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: calc(0.5em - 0.5px);
+            width: 0.5px;
+            background: var(--text-secondary);
+        }
+
+        .chain-dot {
+            position: absolute;
+            /* centered on the header row of the station */
+            top: 0.55em;
+            /* centered on the spine line (0.5em - half dot width) */
+            left: 0.25em;
+            width: 0.5em;
+            height: 0.5em;
+            border-radius: 50%;
+            /* hollow ring by default; only the active streaming node fills */
+            background: transparent;
+            border: 1.5px solid var(--text-secondary);
+            box-sizing: border-box;
+        }
+    }
+
+    .chain-station:first-child .chain-rail::before {
+        top: -0.45em;
+    }
+
+    .chain-station:last-child:not(:has(.prompt-processing-indicator-wrapper)) .chain-rail::before {
+        bottom: auto;
+        height: 0.8em;
+    }
+
+    .chain-station:first-child:last-child:not(:has(.prompt-processing-indicator-wrapper)) .chain-rail::before {
+        height: 1.25em;
+    }
+
+    .chain-content {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .chain-station:has(.tool-call-card) > .chain-rail .chain-dot,
+    .chain-station:has(.reasoning-wrapper) > .chain-rail .chain-dot,
+    .chain-station:has(.combined-block) > .chain-rail .chain-dot {
+        display: none;
+    }
+
+    /* safety net: a station that rendered nothing renders no node */
+    .chain-station:not(:has(.tool-call-card, .reasoning-wrapper, .combined-block, .content)) > .chain-rail .chain-dot {
+        display: none;
+    }
+
+    &.is-streaming .chain-station:last-child .combined-block:not(.collapsed) > .node-dot {
+        border-color: var(--accent);
+        color: var(--accent);
+        animation: statusPulse 1.5s ease-in-out infinite;
+    }
+
+    .chain-station:has(.prompt-processing-indicator-wrapper) > .chain-rail .chain-dot {
+        display: none;
+    }
+
+    .node-dot {
+        position: absolute;
+        /* content column starts at 0.3em + 1.18em = 1.48em; spine is at
+           0.5em, so centering a 1em dot on it -> left = -(1.48 - 0.5) - 0.5 */
+        left: -1.48em;
+        top: 0.3em;
+        width: 1em;
+        height: 1em;
+        border-radius: 50%;
+        background: var(--bg-primary);
+        border: 1px solid var(--text-secondary);
+        box-sizing: border-box;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--text-secondary);
+        cursor: pointer;
+        z-index: 1;
+        transition: border-color 0.15s ease;
+
+        svg {
+            width: 0.65em;
+            height: 0.65em;
+            transition: transform 0.2s ease;
+        }
+
+        &.expanded svg {
+            transform: rotate(90deg);
+        }
+    }
+
+    .node-dot:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+    }
+
+    .tool-call-card.tool-error .node-dot {
+        border-color: var(--error, #f87171);
+    }
+
+    .tool-call-card.tool-error .node-dot:hover {
+        border-color: var(--error, #f87171);
+        color: var(--error, #f87171);
+    }
+
+    .tool-call-card.tool-error .header .icon {
+        color: var(--error, #f87171);
+    }
+
+    .tool-call-card.tool-error .call-args {
+        color: var(--error, #f87171);
+        opacity: 0.7;
+    }
+
+    .tool-call-card.tool-error .header,
+    .tool-call-card.tool-error .header .name {
+        color: var(--error, #f87171);
+    }
+
+    .chain-station:has(+ .chain-end) .chain-rail::before {
+        bottom: -0.6em;
+    }
+
+    /* while streaming, the newest station is the last child (no finish
+       flag yet), so its node pulses. once the answer starts, the flag
+       renders, no station is last anymore, and the pulse stops. */
+    &.is-streaming .chain-station:last-child .chain-dot {
+        background: var(--accent);
+        border-color: var(--accent);
+        animation: statusPulse 1.5s ease-in-out infinite;
+    }
+
+    &.is-streaming .tool-call-card.tool-pending .node-dot {
+        border-color: var(--accent);
+        color: var(--accent);
+        animation: statusPulse 1.5s ease-in-out infinite;
+    }
+
+    /* actively thinking reasoning pulses its node too */
+    .reasoning-wrapper.is-reasoning-active .node-dot {
+        border-color: var(--accent);
+        color: var(--accent);
+        animation: statusPulse 1.5s ease-in-out infinite;
+    }
+
+    .chain-content .content {
+        color: var(--text-secondary);
+        font-size: 0.85rem;
+    }
+
+    .chain-end {
+        display: flex;
+        align-items: center;
+        gap: 0.75em;
+        padding-top: 0.6em;
+        color: var(--text-secondary);
+
+        svg {
+            width: 1.1em;
+            height: 1.1em;
+            flex-shrink: 0;
+            /* pole top meets the incoming line instead of starting 1px under it */
+            margin-top: -2px;
+        }
+    }
+}

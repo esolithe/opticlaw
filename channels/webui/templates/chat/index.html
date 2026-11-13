@@ -2,9 +2,8 @@
 {% if config.get('enable_chat_header') %}
     {% include 'chat/header.html' %}
 {% endif %}
-{% if config.get('enable_chat_titlebar') %}
-    {% include 'chat/titlebar.html' %}
-{% endif %}
+
+{{ extension_slot("below_header") }}
 
 <template x-if="$store.ui.notice">
     <div class="notice" x-html="$store.ui.notice"></div>
@@ -12,11 +11,7 @@
 
 <!-- the main message view -->
 <div id="messages" x-ref="messages" x-cloak
-    @scroll.throttle="
-        const el = $el;
-        const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-        $store.ui.shouldScroll = distFromBottom < $store.ui.scrollThreshold;
-    "
+    @scroll.throttle.100ms="$store.ui.onScroll()"
 >
     <!--
         a "turn" is:
@@ -36,26 +31,169 @@
         just like what the webUI uses here!
     -->
 
+    <!-- welcome panel for empty chats -->
+    {% if config.get('show_welcome_screen') %}
+    {% include 'chat/welcome.html' %}
+    {% endif %}
+
+    {{ extension_slot("above_chat_history") }}
+
     <!-- historical turns -->
     <template x-for="(turn, turnIndex) in $store.chat.turnHistory" :key="turnIndex">
         <div class="fullwidth turn" :data-turn-index="turnIndex">
+
+            <template x-if="!$store.ui.isTurnMounted(turnIndex)">
+                <div class="turn-lazy" :style="`min-height: ${$store.ui.turnPlaceholderHeight(turn)}px`"></div>
+            </template>
+
+            <template x-if="$store.ui.isTurnMounted(turnIndex)">
+                <div>
             <!-- user turn (always one message) -->
             <template x-if="turn.role === 'user'">
                 <div class="message-wrapper user" x-data="{ get message() { return turn.messages[0] } }">
                     <div class="message user">
                         {% include 'chat/turns/user.html' %}
                         <div x-data="{ get targetIndex() { return turn.first_message_index } }" class="fullwidth">
-                            {% include 'chat/message_buttons.html' %}
                         </div>
+                    </div>
+                    {% include 'chat/message_buttons.html' %}
+                </div>
+            </template>
+
+            <template x-if="turn.live === true">
+                <div class="message-wrapper assistant">
+                    <div class="message assistant">
+                        <!-- streaming chain wrapper -->
+                        <template x-if="(turn.steps ?? []).length > 0">
+                            <!-- "Processing.." header -->
+                            <div class="agent-chain" :class="{ 'is-streaming': processing }" x-data="{
+                                     // initial collapse state follows the Appearance
+                                     // setting (read fresh at mount, so it applies
+                                     // starting from the next turn)
+                                     // reasoning display disabled: locked collapsed
+                                     {% if config.get('enable_chain_expansion') %}
+                                     collapsed: localStorage.getItem('collapseChainDefault') === 'true',
+                                     {% else %}
+                                     collapsed: true,
+                                     {% endif %}
+                                     get processing() { return $store.stream.state !== 'idle' },
+                                     get lastLabel() {
+                                         const finals = turn.final_messages ?? [];
+                                         const steps = turn.steps ?? [];
+                                         const lastItem = finals[finals.length - 1] ?? steps[steps.length - 1];
+                                         const label = lastItem?.label ?? '';
+                                         // show 'Thinking..' when still thinking, 'Thoughts' when done
+                                         return $store.stream.state === 'idle' ? label.replace('Thinking..', 'Thoughts') : label;
+                                     }
+                                 }">
+                                <!-- reasoning display disabled: locked collapsed, no
+                                     chevron and clicking does nothing -->
+                                {% if not config.get('enable_chain_expansion') %}
+                                <div class="agent-chain-header locked">
+                                {% else %}
+                                <div class="agent-chain-header" @click="collapsed = !collapsed">
+                                {% endif %}
+                                    {% include 'svg/gear.svg' %}
+                                    <span class="label" x-text="processing ? 'Processing..' : 'Process'"></span>
+                                    <span class="activity" x-show="collapsed && lastLabel" x-text="'(' + lastLabel + ')'"></span>
+                                </div>
+                                <template x-if="!collapsed">
+                                    <div class="agent-chain-body">
+                                        <template x-for="(step, stepIndex) in turn.steps" :key="stepIndex">
+                                            <div class="chain-station">
+                                                <div class="chain-rail"><div class="chain-dot"></div></div>
+                                                <div class="chain-content">
+                                                    {% set combined_stream = True %}
+                                                    {% include 'chat/combined_block.html' %}
+                                                </div>
+                                            </div>
+                                        </template>
+                                        <template x-if="$store.stream.state === 'processing_tools'">
+                                            <div class="chain-station">
+                                                <div class="chain-rail"><div class="chain-dot"></div></div>
+                                                <div class="chain-content">
+                                                    {% set pp_variant = 'tool' %}
+                                                    {% include 'chat/prompt_processing.html' %}
+                                                </div>
+                                            </div>
+                                        </template>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
+
+                        <template x-for="(message, messageIndex) in (turn.final_messages ?? [])" :key="'final-'+messageIndex">
+                            {% include 'chat/turns/assistant_stream.html' %}
+                        </template>
                     </div>
                 </div>
             </template>
 
             <!-- assistant turn (multiple messages combined into one bubble) -->
-            <template x-if="turn.role === 'assistant'">
+            <template x-if="turn.role === 'assistant' && !turn.live">
                 <div class="message-wrapper assistant">
                     <div class="message assistant">
-                        <template x-for="(message, messageIndex) in turn.messages" :key="messageIndex">
+                        <template x-if="(turn.steps ?? []).length > 0">
+                            <div class="agent-chain" x-data="{ collapsed: true, mounted: false,
+                                     // tool-less chain (just reasoning/content)
+                                     get thoughtsOnly() { return turn.steps.every(s => s.status === 'thoughts') } }">
+                                {# lock the chain from being expanded if it's turned off - useful in public UI exposure #}
+                                {% if not config.get('enable_chain_expansion') %}
+                                <div class="agent-chain-header locked">
+                                {% else %}
+                                <div class="agent-chain-header" @click="collapsed = !collapsed; if (!collapsed) mounted = true">
+                                {% endif %}
+                                    <template x-if="!thoughtsOnly">
+                                        {% include 'svg/gear.svg' %}
+                                    </template>
+                                    <template x-if="thoughtsOnly">
+                                        {% include 'svg/thought_bubble.svg' %}
+                                    </template>
+                                    <span class="label" x-text="thoughtsOnly ? 'Thoughts' : 'Process'"></span>
+                                    <span class="activity" x-show="collapsed && !thoughtsOnly" x-text="'(' + turn.steps.length + (turn.steps.length === 1 ? ' step)' : ' steps)')"></span>
+                                </div>
+                                <template x-if="mounted">
+                                    <div class="agent-chain-body" x-show="!collapsed" x-collapse.duration.250>
+                                        <!-- thoughts-only turn -->
+                                        <template x-if="thoughtsOnly">
+                                            <div>
+                                                <template x-for="(step, stepIndex) in turn.steps" :key="'th-'+stepIndex">
+                                                    <div class="combined-block expanded">
+                                                        <div class="block">
+                                                            <div class="reasoning-row" x-show="step.reasoning_content">
+                                                                <div class="reasoning-text" x-fade-text="step.reasoning_content"></div>
+                                                            </div>
+                                                            <template x-if="step.content">
+                                                                <div class="step-content" x-md="{ message: step, live: false }"></div>
+                                                            </template>
+                                                        </div>
+                                                    </div>
+                                                </template>
+                                            </div>
+                                        </template>
+                                        <template x-if="!thoughtsOnly">
+                                            <!-- this is where the steps get displayed -->
+                                            <template x-for="(step, stepIndex) in turn.steps" :key="stepIndex">
+                                                <div class="chain-station">
+                                                    <div class="chain-rail"><div class="chain-dot"></div></div>
+                                                    <div class="chain-content">
+                                                        {% set combined_stream = False %}
+                                                        {% include 'chat/combined_block.html' %}
+                                                    </div>
+                                                </div>
+                                            </template>
+                                            <div class="chain-end">
+                                                <!-- DEPRECATED. kept around for if it's ever needed again -->
+                                                {% include 'svg/finish_flag.svg' %}
+                                                <span class="chain-end-label">Finished</span>
+                                            </div>
+                                        </template>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
+
+                        <template x-for="(message, messageIndex) in turn.final_messages ?? []" :key="'final-'+messageIndex">
                             {% include 'chat/turns/assistant_history.html' %}
                         </template>
 
@@ -65,48 +203,56 @@
                     </div>
                 </div>
             </template>
-        </div>
-    </template>
-
-    <!-- streaming assistant turn -->
-    <template x-if="$store.stream.turn.messages">
-        <div class="message-wrapper assistant">
-            <div class="message assistant">
-                <template x-for="(message, messageIndex) in $store.stream.turn.messages" :key="messageIndex">
-                    {% include 'chat/turns/assistant_stream.html' %}
-                </template>
-
-                <template x-if="$store.stream.state === 'processing_tools'">
-                    {% include 'chat/prompt_processing.html' %}
-                </template>
-
-                <div x-data="{ get targetIndex() { return $store.stream.turn.first_message_index }, turn: {} }" class="fullwidth">
-                    {% include 'chat/message_buttons.html' %}
                 </div>
-            </div>
+            </template>
+            <!-- /lazy-mount wrappers -->
         </div>
     </template>
 
     <!-- typing indicator -->
     <template x-if="$store.stream.state === 'message_sending' || $store.stream.state === 'message_received'">
-        <div class="typing-indicator" id="typing" aria-label="AI is typing" x-ignore>
-            <span></span><span></span><span></span>
+        <div class="message-wrapper">
+            <div class="typing-indicator" id="typing" aria-label="AI is typing" x-ignore>
+                <span></span><span></span><span></span>
+            </div>
         </div>
     </template>
 
     <!-- prompt processing indicator (works with llama.cpp and derivatives) -->
     <template x-if="$store.stream.state === 'processing'">
-        {% include 'chat/prompt_processing.html' %}
+        <div class="message-wrapper">
+            {% set pp_variant = 'prompt' %}
+            {% include 'chat/prompt_processing.html' %}
+        </div>
     </template>
+
+    {{ extension_slot("below_chat_history") }}
 </div>
 
-<!-- invisible upload form -->
-{% include 'chat/upload.html' %}
+{{ extension_slot("above_input_bar") }}
 
-<!-- token usage bar -->
-{% include 'chat/token_bar.html' %}
+<!-- invisible upload form -->
+{% if config.get('enable_file_upload') %}
+{% include 'chat/upload.html' %}
+{% endif %}
 
 <!-- input field -->
 <div id="input">
-    {% include 'chat/input.html' %}
+    <!-- steering queue: messages sent while the AI is busy -->
+    <template x-if="$store.stream.state !== 'idle' && $store.stream.queued.length > 0">
+        <div class="steering-queue">
+            <div class="steering-queue-header">steering</div>
+            <template x-for="(msg, qIndex) in $store.stream.queued" :key="'steer-'+qIndex">
+                <div class="steering-item">
+                    <span class="steering-text" x-text="msg.content"></span>
+                </div>
+            </template>
+        </div>
+    </template>
+
+    <div class="input-wrapper">
+        {% include 'chat/input.html' %}
+    </div>
 </div>
+
+{{ extension_slot("below_input_bar") }}

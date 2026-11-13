@@ -1,0 +1,130 @@
+<div class="combined-block" :class="{collapsed: collapsed, expanded: !collapsed}"
+    {% if combined_stream %}
+     x-data="{
+                 displayMode: localStorage.getItem('stepDisplayMode') || 'default',
+
+                 // steps mode is the only mode that starts folded; the other
+                 // two unfold the moment the step's streaming starts
+                 collapsed: $store.stream.state === 'idle'
+                 ||
+                 localStorage.getItem('stepDisplayMode') === 'steps',
+             
+                 autoCollapsed: false,
+                 // the unfold-on-streaming-start fires once per step
+                 autoOpened: false,
+             	 done: $store.stream.state === 'idle',
+             
+                 get thinkingHidden() {
+             		 // collapse-thinking-only mode
+                     if (this.displayMode !== 'thinking') return false;
+                     if ($store.stream.state === 'idle') return false;
+                     return !(turn.steps ?? []).some(s => s.step != null && s.step > step.step)
+                 },
+
+                 // a finished tool step at the end of the chain (waiting for
+                 // the model's next step) must not keep pulsing
+                 get active() {
+                 	return !this.done && (step.status === 'thinking' || step.status === 'running')
+                 }
+             }
+     "
+     x-effect="
+               const hasNewerStep = (turn.steps ?? []).some(s => s.step != null && s.step > step.step);
+               done = $store.stream.state === 'idle' || hasNewerStep || step.status === 'done' || step.status === 'failed' || step.status === 'thoughts';
+
+               // the moment this step's streaming starts unfold it once.
+               if (displayMode !== 'steps' && !done && !autoOpened) {
+                   autoOpened = true;
+                   collapsed = false;
+               }
+
+               // the step tucks itself away
+               // when the next step starts, or when the stream ends
+               if ((hasNewerStep || $store.stream.state === 'idle') && !autoCollapsed) {
+                   autoCollapsed = true;
+                   // steps mode keeps folded steps folded and leaves a
+                   // manually opened step exactly as the user left it
+                   if (displayMode !== 'steps') collapsed = true
+               }
+    "
+    {% else %}
+     x-data="{ collapsed: true }"
+    {% endif %}>
+    <div class="node-dot" :class="{ 'dot-done': step.status === 'done' || step.status === 'thoughts', 'dot-failed': step.status === 'failed', 'dot-live': step.status === 'thinking' || step.status === 'running' }" @click.stop="collapsed = !collapsed"></div>
+    <div class="header" @click="collapsed = !collapsed">
+        <svg class="standalone-chevron" :class="{'expanded': !collapsed}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="9 6 15 12 9 18"></polyline>
+        </svg>
+        <span class="text">
+            <span class="dots" {% if combined_stream %}x-show="active && (step.modules?.length > 0 || step.reasoning_live)"{% else %}x-show="false"{% endif %}><span aria-hidden="true">&nbsp;</span><span aria-hidden="true">&nbsp;</span><span aria-hidden="true">&nbsp;</span></span>
+            <template x-if="(step.reasoning_content || '').trim() !== ''">
+                <span class="thought-header">
+                    {% if combined_stream %}
+                    <span class="step-thought" x-show="!step.reasoning_live" x-text="thoughtSnippet(step.reasoning_content)"></span>
+                    <span class="tool-names thinking-label" x-show="step.reasoning_live">Thinking..</span>
+                    {% else %}
+                    <span class="step-thought" x-text="thoughtSnippet(step.reasoning_content)"></span>
+                    {% endif %}
+                    <span class="step-modules" x-show="step.modules?.length > 0">
+                        <template x-for="(group, gi) in step.modules" :key="'mod-'+gi">
+                            <span class="module-chip">
+                                <span x-show="group.actions.some(a => a.name)" x-text="group.module + ':'"></span>
+                                <template x-for="(action, ai) in group.actions.filter(a => a.name)" :key="'act-'+ai">
+                                    <span class="module-action"><span x-text="action.name.replaceAll('_', ' ')"></span><span class="action-count" x-show="action.count > 1" x-text="'x' + action.count"></span></span>
+                                </template>
+                            </span>
+                        </template>
+                    </span>
+                </span>
+            </template>
+            
+            <!-- thought-less step -->
+            <template x-if="(step.reasoning_content || '').trim() === ''">
+                <span class="bare-header">
+                    <span class="tool-names" x-show="step.modules?.length > 0">
+                        <template x-for="(group, gi) in step.modules" :key="gi">
+                            <span class="module-group">
+                                <span class="tool-module" x-show="group.actions.some(a => a.name)" x-text="group.module + ':'"></span>
+                                <template x-for="(action, ai) in group.actions.filter(a => a.name)" :key="'act-'+ai">
+                                    <span class="tool-action">
+                                        <span x-text="(ai > 0 ? ', ' : '') + action.name.replaceAll('_', ' ')"></span><span class="tool-repeat" x-show="action.count > 1" x-text="'x' + action.count"></span>
+                                    </span>
+                                </template>
+                            </span>
+                        </template>
+                    </span>
+                    <span class="tool-names" x-show="!step.modules || step.modules.length === 0"
+                          {% if combined_stream %}
+                          x-text="step.reasoning_content ? (step.reasoning_live ? 'Thinking..' : 'Thoughts') : 'writing'"></span>
+                          {% else %}
+                          x-text="step.reasoning_content ? 'Thoughts' : 'writing'"></span>
+                          {% endif %}
+                    <span class="step-args" x-show="step.tool_calls?.length === 1"
+                          x-text="step.tool_calls?.[0]?._metadata?.summary ?? ''"></span>
+                    <span class="step-summary" x-show="step.tool_calls?.length === 1 && step.tool_calls[0]._metadata?.response"
+                          x-text="step.tool_calls?.[0]?._metadata?.response ? toolCallResultSummary(step.tool_calls[0], step.tool_calls[0].id ?? (step.tool_call_id + ':0')) : ''"></span>
+                </span>
+            </template>
+        </span>
+    </div>
+    <div x-show="!collapsed" x-collapse.duration.250>
+        <div class="block">
+            <!-- reasoning gets the thought bubble, like a mini Thoughts
+                 block inside the step -->
+            <div class="reasoning-row" {% if combined_stream %}x-show="step.reasoning_content && !thinkingHidden"{% else %}x-show="step.reasoning_content"{% endif %}>
+                <div class="reasoning-text" x-fade-text="step.reasoning_content" x-auto-scroll></div>
+            </div>
+            <!-- intermediate content riding along with the step (the model
+                 narrating before/while it calls tools) -->
+            <template x-if="step.content">
+                {% if combined_stream %}
+                <div class="step-content" x-md="{ message: step, live: step.is_tail === true }"></div>
+                {% else %}
+                <div class="step-content" x-md="{ message: step, live: false }"></div>
+                {% endif %}
+            </template>
+            {% set toolcard_in_step = True %}
+            {% include 'chat/toolcalls.html' %}
+        </div>
+    </div>
+</div>

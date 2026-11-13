@@ -1,10 +1,10 @@
 /* 
  * --- useful functions for sending/receiving to/from the backend API and websockets
  */
-async function simpleApiFetch(url) {
+async function simpleApiFetch(url, signal = null) {
     // fetches something from the API and returns the data extracted from the JSON response
     raw_data = await(
-        await fetch(url)
+        await fetch(url, signal ? { signal } : {})
     ).json()
 
     if (!raw_data.success) {
@@ -23,8 +23,6 @@ async function simpleApiPost(url, content=null) {
         })
     ).json()
 
-    console.log(raw_data.data);
-
     if (!raw_data.success) {
         throw raw_data.data;
     }
@@ -34,11 +32,8 @@ async function simpleApiPost(url, content=null) {
 
 async function simpleSocketSend(data) {
     try {
-        console.log(data);
         return window.socket.send(JSON.stringify(data));
     } catch (e) {
         return false
     }
-
-    return true
 }

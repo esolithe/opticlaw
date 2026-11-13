@@ -1,0 +1,133 @@
+/* =============================================================================
+ *  Custom tool call views - base styling
+ *  ============================================================================= */
+
+.tool-call-card {
+    .display-error {
+        margin-top: 6px;
+        font-size: 0.8rem;
+        color: var(--error, #f87171);
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-family: var(--code-font);
+    }
+
+    /* single line below a custom display box (eg. file: foo.py) */
+    .display-footer {
+        margin-top: 6px;
+        font-size: 0.78rem;
+        color: var(--text-secondary);
+        opacity: 0.8;
+        font-family: var(--code-font);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    /* dim truncation/cap/note line under a view box. de-facto shared chrome:
+       the grep, glob, file-read, shell, web_search AND tools_load views all
+       render their notes with this class (the name predates the spread). */
+    .grep-note {
+        margin-top: 6px;
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+        opacity: 0.75;
+        font-style: italic;
+    }
+
+    .module-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+
+        .module-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-full, 999px);
+            color: var(--text-secondary);
+            font-size: 0.82rem;
+            font-weight: 500;
+
+            svg {
+                width: 0.95em;
+                height: 0.95em;
+                flex-shrink: 0;
+            }
+        }
+    }
+
+    .tool-load-group {
+        /* the (hidden) running-chips div stays a sibling, so separate on the
+           group itself instead of relying on :first-child */
+        & + .tool-load-group {
+            margin-top: 10px;
+        }
+
+        .tool-load-module {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 5px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            opacity: 0.85;
+
+            svg {
+                width: 0.95em;
+                height: 0.95em;
+                flex-shrink: 0;
+                color: var(--accent);
+            }
+
+            .tool-load-count {
+                font-weight: 400;
+                font-size: 0.72rem;
+                color: var(--text-secondary);
+                opacity: 0.7;
+            }
+        }
+
+        .tool-load-rows {
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            overflow: hidden;
+
+            .tool-load-row {
+                display: flex;
+                align-items: baseline;
+                gap: 10px;
+                padding: 5px 10px;
+
+                & + .tool-load-row {
+                    border-top: 1px solid var(--border-color);
+                }
+
+                &:hover {
+                    background: color-mix(in srgb, var(--accent) 6%, transparent);
+                }
+
+                .tool-load-name {
+                    font-family: var(--code-font);
+                    font-size: 0.78rem;
+                    color: var(--accent);
+                    white-space: nowrap;
+                }
+
+                .tool-load-desc {
+                    flex: 1;
+                    min-width: 0;
+                    font-size: 0.75rem;
+                    color: var(--text-secondary);
+                    opacity: 0.75;
+                    white-space: nowrap;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                }
+            }
+        }
+    }
+}

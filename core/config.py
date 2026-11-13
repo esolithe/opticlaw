@@ -1,20 +1,28 @@
 import os
-import yaml
+import ast
 import copy
 import core
 import modules
 import user_modules
 import channels
 import user_channels
-import pkgutil
 import hashlib
 import json
 import inspect
 
 config = None
 _registry_cache = None
+_cache_refresh_in_progress = False
 
 SCHEMA_CACHE_FILE = ".module_cache.json"
+
+# bump whenever the shape of cached module metadata changes (e.g. a new metadata
+# field was added). a cache file written by another version is rebuilt in full on
+# startup, so stale entries never serve incomplete metadata.
+SCHEMA_CACHE_VERSION = 5
+
+# the section keys the cache stores module/channel entries under
+CACHE_SECTIONS = ("channels", "user_channels", "modules", "user_modules")
 
 core_settings_schema = {
     "core": {
@@ -31,9 +39,9 @@ core_settings_schema = {
             "description": "The prefix used to determine whether something is a command. For example, when it's set to `/`, all commands must be prefixed with `/` as in `/help`. If you set it to `!`, it will be `!help` instead."
         },
         "tool_timeout": {
-            "default": 15,
+            "default": 30,
             "description": "Timeout in seconds for tool execution. This applies per individual tool, and is used to forcefully kill off tools that run too long."
-        }
+        },
     },
     "api": {
         "url": {
@@ -55,6 +63,10 @@ core_settings_schema = {
         "max_messages": {
             "default": 200,
             "description": "Maximum number of messages to keep in conversation history. If this amount of messages is exceeded, it will trim the context window even if the token limit hasn't been reached!"
+        },
+        "evict_block": {
+            "default": 32,
+            "description": "When the message history exceeds max_messages, messages are removed in blocks of this size. (example: if set to 32, it'll remove 32 messages from history to make space for the next 32 messages)"
         },
         "use_developer_role": {
             "default": False,
@@ -78,6 +90,29 @@ core_settings_schema = {
         "use_tools": {
             "default": True,
             "description": "Enable tool/function calling for the model. Turn this off if you just wanna talk to the AI and don't care for all this agentic stuff! Essentially turns it into a chatbot that can't actually do anything, but it can still answer your questions."
+        },
+        "dynamic_tool_loading": {
+            "default": False,
+            "description": "When enabled, only a small selection of tools is loaded at first, but the AI can load them dynamically from enabled openlumara modules. When disabled, all available tools are loaded at startup for immediate use.",
+            "depends": "use_tools"
+        },
+        "preloaded_modules": {
+            "default": [],
+            "description": "List of module names whose tools are always preloaded at startup. Keeps frequently-used tools available immediately, everything else stays available via the dynamic tool loader.",
+            "type": "list",
+            "depends": "use_tools"
+        },
+        "automatically_compress_context": {
+            "default": True,
+            "description": """
+When enabled, context will automatically be compressed when the threshold (defined below) is hit. This will make the AI summarize the current state of your conversation, so that it can continue where it left off without having to reprocess the entire context with every request. This will let you have an 'infinite context window' of sorts where the AI can keep working on your request forever.
+
+When disabled, it will instead remove your old messages from context to make space for new ones - which is fine at small context sizes, but can be really slow at large context sizes. You will still have infinite context, but as soon as you hit the context window's size limit, requests will slow down massively.
+            """.strip()
+        },
+        "context_compression_threshold": {
+            "default": 0.7,
+            "description": "Percentage of the context that must be full in order for the automatic compression to trigger."
         },
         "enable_thinking": {
             "default": True,
@@ -186,19 +221,14 @@ DEFAULT_MODULES = (
     "tutorial",
     "docs",
     "identity",
-    "writing_style",
     "models",
     "channel",
     "modules",
     "chats",
     "context",
     "memory",
-    "notes",
-    "lists",
     "scheduler",
     "calendar",
-    "calculator",
-    "token_threshold",
     "time",
     "auto_backup"
 )
@@ -232,11 +262,11 @@ class ConfigManager:
             return default
 
         keys = list(args)
-        # If the last argument is not a string, or is empty, treat it as an explicit default
-        if keys and not isinstance(keys[-1], str) or not keys[-1]:
+        # if the last argument is not a string (or is an empty string), treat it as an explicit default
+        if keys and (not isinstance(keys[-1], str) or not keys[-1]):
             default = keys.pop()
 
-        # Start from the root config and traverse through the base path
+        # start from the root config and traverse through the base path
         current = self.root_config
         for k in self.base_path:
             if isinstance(current, dict) and k in current:
@@ -251,6 +281,18 @@ class ConfigManager:
             else:
                 return default
         return current
+
+    def set(self, key, value):
+        """Set a key to a value.. duh lol"""
+        current = self.root_config
+        for k in self.base_path:
+            if k not in current or not isinstance(current[k], dict):
+                current[k] = {}
+            current = current[k]
+
+        current[key] = value
+        if hasattr(self.root_config, 'save'):
+            self.root_config.save()
 
     def to_dict(self):
         # reload from disk
@@ -302,10 +344,9 @@ def _discover_available_names(package):
     """
     Discover module names from filesystem WITHOUT importing them.
     This allows the config to know what modules exist without loading them.
+    Folder-only layout: a folder counts only if it contains module.py or channel.py.
     """
-    if not hasattr(package, '__path__'):
-        return []
-    return [modname for _, modname, _ in pkgutil.iter_modules(package.__path__)]
+    return core.modules.discover_module_names(package)
 
 def _get_registry_data(enabled_channels=None, enabled_user_channels=None, enabled_modules=None, enabled_user_modules=None):
     """
@@ -384,37 +425,50 @@ def _get_registry_data(enabled_channels=None, enabled_user_channels=None, enable
     _registry_cache = {'key': cache_key, 'data': result}
     return result
 
-def _inject_settings_into_dict(target_dict, instances, section_key):
-    """Helper to build the schema by injecting class settings defaults."""
-    section = target_dict.setdefault(section_key, {})
-    settings = section.setdefault("settings", {})
-    for inst in instances:
-        name = core.modules.get_name(inst)
-        defaults = getattr(inst, 'settings', {})
-        if isinstance(defaults, dict) and defaults:
-            # We inject the full dict (including descriptions) into the schema.
-            # sync_config will later replace these dicts with flat values
-            # if the user has provided them in the config file.
-            settings[name] = defaults.copy()
-
 def _get_module_schema_cache():
     """
     Returns a dictionary containing the cached schemas and checksums for all modules/channels.
     If the cache is missing or outdated, it performs a refresh.
     """
     cache_path = os.path.abspath(os.path.join(core.get_path(), SCHEMA_CACHE_FILE))
-    cache = {"channels": {}, "user_channels": {}, "modules": {}, "user_modules": {}}
+    cache = {section_key: {} for section_key in CACHE_SECTIONS}
+    cache["_version"] = SCHEMA_CACHE_VERSION
+
+    # a cache written by a different cache version holds metadata in an old
+    # shape (e.g. missing 'category'). force a full rebuild in that case.
+    force_full_refresh = False
 
     # Load existing cache
     if os.path.exists(cache_path):
         try:
             with open(cache_path, 'r') as f:
-                cache = json.load(f)
+                loaded = json.load(f)
+            if loaded.get("_version") != SCHEMA_CACHE_VERSION:
+                force_full_refresh = True
+            # merge per-section so a cache file missing a section doesn't silently disable scanning for it
+            for section_key in CACHE_SECTIONS:
+                cache[section_key] = loaded.get(section_key, {})
         except Exception as e:
             print(f"[CORE] error while loading module cache {core.detail_error(e)}")
     else:
         print(f"[CORE] creating module cache at {cache_path}")
 
+    # re-entrancy guard: modules may call get_schema/get_module_structure at import time (during class-body evaluation),
+    # which would re-enter this function while a refresh is loading them. that causes an infinite reload loop. Break it by returning as-is.
+    global _cache_refresh_in_progress
+    if _cache_refresh_in_progress:
+        return cache
+    _cache_refresh_in_progress = True
+    try:
+        cache = _refresh_module_schema_cache(cache, cache_path, force_full_refresh=force_full_refresh)
+    finally:
+        # always release the guard, even if something unexpected blows up mid-refresh
+        _cache_refresh_in_progress = False
+
+    return cache
+
+def _refresh_module_schema_cache(cache, cache_path, force_full_refresh=False):
+    """Scan the filesystem for new/changed/deleted modules and rebuild the cache dict accordingly."""
     package_map = {
         "channels": (channels, core.channel.Channel),
         "user_channels": (user_channels, core.channel.Channel),
@@ -422,7 +476,8 @@ def _get_module_schema_cache():
         "user_modules": (user_modules, core.module.Module)
     }
 
-    sections_to_refresh = set()
+    # when the on-disk cache is from another cache version, rebuild every section
+    sections_to_refresh = set(package_map.keys()) if force_full_refresh else set()
 
     # 1. Check for deletions or changes in existing cache
     for section_key, (package, _) in package_map.items():
@@ -437,24 +492,11 @@ def _get_module_schema_cache():
                 sections_to_refresh.add(section_key)
                 continue
 
-            # Find the file path to check checksum
-            found_file = None
-            for sub_path in package.__path__:
-                # Try module.py
-                f1 = os.path.join(sub_path, f"{name}.py")
-                if os.path.exists(f1):
-                    found_file = f1
-                    break
-                # Try module/__init__.py
-                f2 = os.path.join(sub_path, name, "__init__.py")
-                if os.path.exists(f2):
-                    found_file = f2
-                    break
-
-            if found_file:
-                if cache[section_key][name].get("checksum") != _get_file_checksum(found_file):
-                    sections_to_refresh.add(section_key)
-            else:
+            # -- AI GENERATED CODE (Qwen3.8 Flash Next) :: (2026-10-13) status:reviewed
+            # detect any recursive change in the module/channel folder: files or
+            # folders added, removed, renamed, or modified.
+            folder_fingerprint = _get_module_folder_fingerprint(package, name)
+            if not folder_fingerprint or cache[section_key][name].get("fingerprint") != folder_fingerprint:
                 sections_to_refresh.add(section_key)
 
         # 2. Check for new modules
@@ -468,17 +510,21 @@ def _get_module_schema_cache():
     if sections_to_refresh:
         for section_key in sections_to_refresh:
             package, base_class = package_map[section_key]
+            loaded_names = set()
             try:
                 # Force reload modules to pick up schema changes from disk
                 classes = core.modules.load(package, base_class, reload=True, loading_config=True)
 
                 for cls in classes:
                     name = core.modules.get_name(cls)
+                    loaded_names.add(name)
                     settings = getattr(cls, 'settings', {})
 
-                    # Capture docstring and the unsafe class attribute
+                    # Capture docstring and the unsafe/category class attributes
                     docstring = inspect.getdoc(cls) or ""
                     unsafe = getattr(cls, 'unsafe', False)
+
+                    category = getattr(cls, 'category', "") or ""
 
                     module = inspect.getmodule(cls)
                     checksum = ""
@@ -489,14 +535,45 @@ def _get_module_schema_cache():
                     cache[section_key][name] = {
                         "schema": settings,
                         "checksum": checksum,
+                        "fingerprint": _get_module_folder_fingerprint(package, name),
                         "metadata": {
                             "docstring": docstring,
-                            "unsafe": unsafe  # Added to cache
+                            "unsafe": unsafe,  # Added to cache
+                            "category": category
                         }
                     }
 
             except Exception as e:
                 print(f"[CORE] Failed to refresh cache for {section_key}: {core.detail_error(e)}")
+
+            try:
+                for name in _discover_available_names(package):
+                    if name in loaded_names:
+                        continue
+
+                    entry = cache[section_key].get(name)
+                    if not isinstance(entry, dict):
+                        continue
+
+                    file_path = core.modules._get_module_file_path(package, name)
+                    if not file_path:
+                        continue
+
+                    # keep the fingerprint current even for modules that could not
+                    # be imported, otherwise a broken module would refresh forever.
+                    entry["checksum"] = _get_file_checksum(file_path)
+                    entry["fingerprint"] = _get_module_folder_fingerprint(package, name)
+
+                    extracted = _extract_class_metadata_from_file(file_path)
+                    if not extracted:
+                        continue
+
+                    metadata = entry.setdefault("metadata", {})
+                    metadata["docstring"] = extracted["docstring"]
+                    metadata["unsafe"] = extracted["unsafe"]
+                    metadata["category"] = extracted["category"]
+            except Exception as e:
+                print(f"[CORE] failed to statically read metadata for {section_key}: {core.detail_error(e)}")
 
         try:
             with open(cache_path, 'w') as f:
@@ -505,6 +582,234 @@ def _get_module_schema_cache():
             print(f"[CORE] failed to save module cache: {core.detail_error(e)}")
 
     return cache
+
+def _ast_class_attrs(node):
+    """
+    Read docstring/unsafe/category assignments straight off a class definition node.
+    category stays None when the class does not declare one itself (so we know to
+    look at its base classes).
+    """
+    docstring = ast.get_docstring(node) or ""
+    unsafe = False
+    category = None
+    looks_like_module = False
+
+    for item in node.body:
+        if not isinstance(item, ast.Assign) or len(item.targets) != 1:
+            continue
+        target = item.targets[0]
+        if not isinstance(target, ast.Name):
+            continue
+
+        if target.id in ("settings", "dependencies"):
+            looks_like_module = True
+        elif target.id == "unsafe" and isinstance(item.value, ast.Constant):
+            unsafe = bool(item.value.value)
+            looks_like_module = True
+        elif target.id == "category" and isinstance(item.value, ast.Constant) and isinstance(item.value.value, str):
+            category = item.value.value
+            looks_like_module = True
+
+    return {"docstring": docstring, "unsafe": unsafe, "category": category, "looks_like_module": looks_like_module}
+
+
+def _dotted_name(node):
+    """turns an ast Name/Attribute chain (e.g. `modules.http.Http`) into its dotted string"""
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        parts.append(node.id)
+        return ".".join(reversed(parts))
+    return ""
+
+
+def _parse_ast(filepath):
+    try:
+        with open(filepath, 'r', encoding="utf-8") as f:
+            return ast.parse(f.read())
+    except Exception:
+        return None
+
+
+def _import_aliases(tree):
+    """maps locally imported names to their dotted origin, e.g. `from modules.http import Http` -> Http = modules.http.Http"""
+    aliases = {}
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom) and node.module:
+            for alias in node.names:
+                aliases[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                aliases[alias.asname or alias.name] = alias.name
+    return aliases
+
+
+def _find_class_node(tree, class_name):
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == class_name:
+            return node
+    return None
+
+
+def _module_file_for_dotted(dotted_path):
+    """resolves a dotted module path like `modules.http` to its entry file, without importing anything"""
+    parts = dotted_path.split(".")
+    if len(parts) < 2 or parts[0] not in ("modules", "user_modules", "channels", "user_channels"):
+        return None
+
+    folder = os.path.join(core.get_path(), *parts)
+    for entry in ("module.py", "channel.py"):
+        candidate = os.path.join(folder, entry)
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _resolve_ast_category(tree, filepath, class_node, visited, depth=0):
+    """
+    walks a class and then its base classes to find a declared category, mirroring what
+    getattr() inheritance does for importable modules. supports bases written as full
+    dotted paths (modules.http.Http) as well as imported names (Http).
+    """
+    meta = _ast_class_attrs(class_node)
+    if meta["category"] is not None:
+        return meta["category"]
+
+    if depth >= 6:
+        return None
+
+    visited.add(os.path.abspath(filepath))
+    aliases = _import_aliases(tree)
+
+    for base in class_node.bases:
+        dotted = _dotted_name(base)
+        if not dotted:
+            continue
+
+        # base class defined in this same file
+        if "." not in dotted:
+            base_node = _find_class_node(tree, dotted)
+            if base_node is not None:
+                result = _resolve_ast_category(tree, filepath, base_node, visited, depth + 1)
+                if result is not None:
+                    return result
+
+        # base class coming from another module/channel folder
+        origin = aliases.get(dotted, dotted)
+        origin_parts = origin.split(".")
+        base_file = _module_file_for_dotted(".".join(origin_parts[:-1]))
+        if not base_file or os.path.abspath(base_file) in visited:
+            continue
+
+        base_tree = _parse_ast(base_file)
+        if base_tree is None:
+            continue
+
+        base_node = _find_class_node(base_tree, origin_parts[-1])
+        if base_node is None:
+            continue
+
+        result = _resolve_ast_category(base_tree, base_file, base_node, visited, depth + 1)
+        if result is not None:
+            return result
+
+    return None
+
+
+def _extract_class_metadata_from_file(filepath):
+    """
+    Statically extract docstring/unsafe/category from a module/channel file without
+    importing it (same spirit as core.modules._extract_deps_from_file).
+
+    Used as a fallback for modules that cannot be imported (e.g. their dependencies
+    are not installed), so their cached metadata never goes stale. Categories are
+    inherited from parent classes (across module files) just like getattr() would.
+    Returns None when the file cannot be parsed or contains no class.
+    """
+    tree = _parse_ast(filepath)
+    if tree is None:
+        return None
+
+    candidates = []
+    for node in tree.body:
+        if not isinstance(node, ast.ClassDef):
+            continue
+        meta = _ast_class_attrs(node)
+        meta["node"] = node
+        candidates.append(meta)
+
+    if not candidates:
+        return None
+
+    # prefer the class that actually looks like the module/channel class
+    chosen = next((c for c in candidates if c["looks_like_module"]), candidates[0])
+    category = _resolve_ast_category(tree, filepath, chosen["node"], set()) or ""
+
+    return {"docstring": chosen["docstring"], "unsafe": chosen["unsafe"], "category": category}
+
+
+def _get_module_folder_path(package, module_name):
+    """returns the folder containing a module/channel entry file"""
+    module_file = core.modules._get_module_file_path(package, module_name)
+    if module_file:
+        return os.path.dirname(module_file)
+
+    for sub_path in getattr(package, "__path__", []):
+        candidate = os.path.join(sub_path, module_name)
+        if os.path.isdir(candidate):
+            return candidate
+    return ""
+
+
+def _get_module_folder_fingerprint(package, module_name):
+    """builds a recursive fingerprint for a module/channel folder.
+
+    This intentionally uses paths, sizes and mtimes rather than file contents so
+    that adding/removing/changing files is cheap to detect without hashing large
+    asset folders on every startup.
+    -- AI GENERATED CODE (Qwen3.8 Flash Next) :: (2026-10-13) status:reviewed
+    """
+    folder = _get_module_folder_path(package, module_name)
+    if not folder or not os.path.isdir(folder):
+        return ""
+
+    hasher = hashlib.md5()
+    skip_dirs = {
+        "__pycache__",
+        ".git",
+        ".hg",
+        ".svn",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        "node_modules",
+    }
+    skip_exts = {".pyc", ".pyo", ".swp", ".swo", ".tmp", ".lock"}
+    skip_files = {".DS_Store", "Thumbs.db"}
+
+    for root, dirs, files in os.walk(folder):
+        dirs[:] = sorted(d for d in dirs if d not in skip_dirs)
+
+        rel_root = os.path.relpath(root, folder).replace(os.sep, "/")
+        hasher.update(f"DIR:{rel_root}\n".encode("utf-8"))
+
+        for filename in sorted(files):
+            if filename in skip_files or os.path.splitext(filename)[1] in skip_exts:
+                continue
+
+            full_path = os.path.join(root, filename)
+            try:
+                stat_result = os.stat(full_path)
+            except OSError:
+                continue
+
+            rel_path = os.path.relpath(full_path, folder).replace(os.sep, "/")
+            hasher.update(f"FILE:{rel_path}|{stat_result.st_size}|{stat_result.st_mtime_ns}\n".encode("utf-8"))
+
+    return hasher.hexdigest()
+
 
 def _get_file_checksum(filepath):
     """Calculate MD5 checksum of a file."""
@@ -542,24 +847,7 @@ def _merge_core_settings(user_config, schema):
             new_config[k] = _flatten_settings(v)
     return new_config
 
-def apply_core_settings_schema(user_config, schema):
-    """
-    Applies the core_settings_schema to user_config, merging defaults.
-    Returns a new dict with all schema keys present and defaults filled in.
-    """
-    if not isinstance(user_config, dict):
-        user_config = {}
-
-    result = {}
-    for section_key, section_schema in schema.items():
-        user_section = user_config.get(section_key, {})
-        if isinstance(section_schema, dict) and isinstance(user_section, dict):
-            result[section_key] = _merge_core_settings(user_section, section_schema)
-        else:
-            result[section_key] = _flatten_settings(section_schema)
-    return result
-
-def get_schema(*args, **kwargs):
+def get_schema():
     """
     Returns the config schema using the on-disk cache.
     Contains all possible module settings to allow persistence for disabled modules.
@@ -568,6 +856,10 @@ def get_schema(*args, **kwargs):
     cache = _get_module_schema_cache()
 
     for section_key, section_cache in cache.items():
+        # skip non-section bookkeeping keys (like _version)
+        if section_key not in CACHE_SECTIONS:
+            continue
+
         section = schema.setdefault(section_key, {})
         settings = section.setdefault("settings", {})
         for name, data in section_cache.items():
@@ -589,6 +881,7 @@ def get_module_structure():
             "metadata": {
                 "doc": "...",
                 "unsafe": True/False,
+                "category": "...",
                 "type": "module" | "channel" | "user_module"
             }
         }
@@ -606,6 +899,10 @@ def get_module_structure():
     }
 
     for section_key, section_cache in cache.items():
+        # skip non-section bookkeeping keys (like _version)
+        if section_key not in CACHE_SECTIONS:
+            continue
+
         type_str = type_map.get(section_key, "unknown")
 
         for name, data in section_cache.items():
@@ -616,6 +913,8 @@ def get_module_structure():
                 "metadata": {
                     "doc": metadata["docstring"],
                     "unsafe": metadata["unsafe"],
+                    # older cache entries may predate the category field
+                    "category": metadata.get("category", ""),
                     "type": type_str
                 }
             }
@@ -794,7 +1093,8 @@ def load(file_path=None):
     global _registry_cache
     _registry_cache = None
 
-    config = core.storage.StorageDict(filename, "yaml", path=dirname, override_temporary=True)
+    # file_mode 0o600, in other words chmod 600... readable only by the user, no other groups or other users
+    config = core.storage.StorageDict(filename, "yaml", path=dirname, override_temporary=True, file_mode=0o600)
     if not config:
         new_config = True
 
@@ -845,18 +1145,16 @@ def get(*args, **kwargs):
     """Shorthand for accessing nested config values.
     Usage: config.get("api", "url") or config.get("api", "url", default_value)
     """
-    global config, default_config
-
     default = kwargs.get("default", None)
     if not args:
         return default
 
     keys = list(args)
-    # If the last argument is not a string, or is empty, treat it as an explicit default
-    if keys and not isinstance(keys[-1], str) or not keys[-1]:
+    # if the last argument is not a string (or is an empty string), treat it as an explicit default
+    if keys and (not isinstance(keys[-1], str) or not keys[-1]):
         default = keys.pop()
 
-    # Safely resolve to a dictionary
+    # safely resolve to a dictionary
     try:
         value = dict(config) if config else dict(default_config)
     except (TypeError, ValueError):

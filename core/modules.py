@@ -9,7 +9,10 @@ import subprocess
 import asyncio
 import importlib
 import importlib.util
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
 import traceback
 from packaging.requirements import Requirement, InvalidRequirement
 

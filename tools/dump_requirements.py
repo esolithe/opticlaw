@@ -7,7 +7,10 @@ by default only the required dependencies are written; --groups adds optional on
 import argparse
 import pathlib
 import sys
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 PYPROJECT = ROOT / "pyproject.toml"

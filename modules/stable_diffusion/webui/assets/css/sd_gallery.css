@@ -30,9 +30,13 @@
 .sd-gal-count {
     color: var(--text-secondary);
     font-size: 12.5px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
-.sd-gal-head-actions { display: flex; align-items: center; gap: 2px; }
+.sd-gal-head-actions { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
 .sd-gal-refresh,
 .sd-gal-wallbtn,
 .sd-gal-orbtn,
@@ -266,6 +270,22 @@
     flex-direction: column;
     overflow: hidden;
 }
+/* phones: fit-content hugs whatever the picture happens to be wide -
+   useless there. the core makes phone modals full-screen columns, so
+   take the full width; the detail boxes already wrap into a stack, and
+   the picture is capped by max-width so it never overflows. */
+@media (max-width: 768px) {
+    .modal.sd-gal-modal {
+        width: 100%;
+        max-width: 100%;
+        border-radius: 0;
+        border-left: none;
+        border-right: none;
+    }
+    .sd-gal-metabox {
+        min-width: 0;
+    }
+}
 /* header: [back] title .......... [x] - the title takes the slack */
 .sd-gal-modal .header { justify-content: flex-start; gap: 8px; }
 .sd-gal-modal .header h2.sd-gal-modal-title {
@@ -278,17 +298,18 @@
 .sd-gal-modal .header .close { flex: 0 0 auto; }
 .sd-gal-back {
     flex: 0 0 auto;
-    padding: 0 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 8px;
     background: transparent;
     border: 1px solid var(--border-color);
     border-radius: var(--radius-sm);
-    font-size: 1.1rem;
-    line-height: 1;
     color: var(--text-secondary);
     cursor: pointer;
     transition: all 0.15s ease;
-    font-family: var(--font-primary);
 }
+.sd-gal-back svg { display: block; width: 16px; height: 16px; }
 .sd-gal-back:hover {
     background: var(--button-bg);
     color: var(--button-text);
@@ -308,11 +329,25 @@
     height: auto;
     border-radius: 10px;
 }
+/* the name header under the picture: a centered caption framed by
+   em dashes (the dashes live in the markup) */
+.sd-gal-caption {
+    margin-top: 10px;
+    text-align: center;
+    font-size: 13.5px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--text-primary);
+    word-break: break-word;
+}
 
 /* the detail row under the picture: prompt box (left, wider) + metadata
    column (right). both scroll on their own; on a narrow modal they wrap
-   into a single stack. */
+   into a single stack. inline-size containment: the row queries its own
+   width below, so the stacked layout follows the ACTUAL wrap - a narrow
+   picture squeezing the fit-content modal included, not just phones. */
 .sd-gal-detail {
+    container-type: inline-size;
     display: flex;
     flex-wrap: wrap;
     align-items: stretch;
@@ -326,15 +361,81 @@
     padding: 12px 14px;
     overflow-y: auto;
 }
-.sd-gal-promptbox {
+/* left column of the detail row: the positive prompt box with the
+   negative prompt box stacked directly beneath it */
+.sd-gal-promptcol {
     flex: 2 1 360px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+.sd-gal-promptbox {
     min-width: 0;
     max-height: 32vh;
 }
-.sd-gal-metabox {
+/* the metadata column rides in a wrapper that carries no height of its
+   own: the flex row is sized purely by the prompt column, and the box
+   fills the stretched wrapper absolutely - so its height always equals
+   the prompt/negative-prompt column's current height, and its rows
+   scroll inside that. */
+.sd-gal-metabox-wrap {
     flex: 1 1 240px;
     min-width: 200px;
-    max-height: 32vh;
+    position: relative;
+}
+.sd-gal-metabox {
+    position: absolute;
+    inset: 0;
+    min-width: 200px;
+    overflow-y: auto;
+}
+/* phones: the stacked layout leaves no reason for inner scrollwells -
+   both boxes grow their full height and the modal body is the one
+   scroller. LAST on purpose: same specificity as the base rules above,
+   and the later rule wins (an earlier copy here silently lost). */
+@media (max-width: 768px) {
+    .sd-gal-metabox,
+    .sd-gal-promptbox {
+        min-width: 0;
+        max-height: none;
+        overflow-y: visible;
+    }
+    .sd-gal-promptcol {
+        flex-basis: 100%;
+    }
+    /* stacked layout: the equal-height trick has no purpose here - let the
+       metadata box be a plain full-width flex item that grows with content */
+    .sd-gal-metabox-wrap {
+        display: contents;
+    }
+    .sd-gal-metabox {
+        position: static;
+        flex: 1 1 100%;
+    }
+}
+/* single-column whenever the detail row ACTUALLY wraps - the flex bases
+   (promptcol 360 + metawrap 240 + 14 gap) sum to 614px, so below that
+   width the two columns drop under each other even on a desktop, e.g.
+   when a narrow picture keeps the fit-content modal slim. Same
+   full-height treatment as the phone stack; also LAST on purpose. */
+@container (max-width: 614px) {
+    .sd-gal-metabox,
+    .sd-gal-promptbox {
+        min-width: 0;
+        max-height: none;
+        overflow-y: visible;
+    }
+    .sd-gal-promptcol {
+        flex-basis: 100%;
+    }
+    .sd-gal-metabox-wrap {
+        display: contents;
+    }
+    .sd-gal-metabox {
+        position: static;
+        flex: 1 1 100%;
+    }
 }
 .sd-gal-box-label {
     font-size: 10.5px;
@@ -382,6 +483,36 @@
     color: var(--button-text);
     border-color: var(--accent);
 }
+/* the favorites toggle: dressed like its header neighbours, lit gold
+   (and filled) while the picture is starred */
+.sd-gal-star {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    padding: 4px 8px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+.sd-gal-star svg {
+    display: block;
+    width: 16px;
+    height: 16px;
+    fill: none;
+    transition: fill 0.15s ease;
+}
+.sd-gal-star:hover {
+    background: var(--button-bg);
+    color: var(--button-text);
+    border-color: var(--accent);
+}
+.sd-gal-star.on { color: #ffcf5c; border-color: rgba(255, 207, 92, 0.5); }
+.sd-gal-star.on svg { fill: currentColor; }
+.sd-gal-star.on:hover { color: #ffd97a; border-color: #ffcf5c; }
 .sd-gal-edit {
     display: flex;
     flex-direction: column;
@@ -442,6 +573,9 @@
     cursor: pointer;
     border-bottom: 1px dotted var(--accent);
     width: fit-content;
+    /* the fit-content box no longer fills the cell, so the right-alignment
+       must happen at the grid level: park the shrunk box against the end */
+    justify-self: end;
 }
 .sd-gal-chatlink:hover { border-bottom-style: solid; }
 
@@ -508,6 +642,39 @@
     flex: 1 1 0;
     min-width: 0;
 }
+/* relative-date sections in every wall view: one masonry block per chat
+   sidebar group (Today / Yesterday / weekday / Last Week / month), under
+   a small letter-spaced heading with a trailing rule */
+.sd-wall-section + .sd-wall-section { margin-top: 4px; }
+.sd-wall-day {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin: 14px 2px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: var(--text-secondary);
+}
+.sd-wall-section:first-child .sd-wall-day { margin-top: 2px; }
+.sd-wall-day::after {
+    content: "";
+    flex: 1 1 auto;
+    height: 1px;
+    background: var(--border-color);
+}
+/* the corner star on wall tiles marks the favorites in every view */
+.sd-wall-fav {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    font-size: 12px;
+    line-height: 1;
+    color: #ffcf5c;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.65);
+    pointer-events: none;
+}
 .sd-wall-item {
     position: relative;
     display: block;
@@ -535,6 +702,9 @@
     border-color: var(--accent);
     box-shadow: var(--shadow-soft, 0 4px 14px rgba(0, 0, 0, 0.35));
 }
+/* the same name-on-hover fade the sidebar tiles have: the shared
+   .sd-gal-name caption sits hidden until the tile is hovered */
+.sd-wall-item:hover .sd-gal-name { opacity: 1; }
 @media (max-width: 560px) {
     .sd-wall-body { padding: 10px; }
     .sd-wall-grid { gap: 8px; }
